@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const sourcePromise = readFile(new URL("../src/tools/deepseek/fs-tools.ts", import.meta.url), "utf8");
+const sourcePromise = readFile(
+  new URL("../src/tools/deepseek/fs-tools.ts", import.meta.url),
+  "utf8",
+);
 
 function block(source: string, functionName: string, nextFunctionName: string): string {
   const start = source.indexOf(`function ${functionName}`);
@@ -17,7 +20,7 @@ test("DeepSeek write keeps Harness fields authoritative and prepares Pi compatib
   const write = block(source, "registerDeepSeekWrite", "registerDeepSeekEdit");
   assert.match(write, /file_path:\s*Type\.String/);
   assert.match(write, /content:\s*Type\.String/);
-  assert.match(write, /path:\s*Type\.Optional\(Type\.String/);
+  assert.match(write, /path:\s*Type\.Optional\(\s*Type\.String/);
   assert.match(write, /prepareArguments:\s*prepareDeepSeekWriteArgsForPi/);
 });
 
@@ -27,9 +30,9 @@ test("DeepSeek edit keeps Harness literal fields authoritative and prepares Pi c
   assert.match(edit, /file_path:\s*Type\.String/);
   assert.match(edit, /old_string:\s*Type\.String/);
   assert.match(edit, /new_string:\s*Type\.String/);
-  assert.match(edit, /replace_all:\s*Type\.Optional\(Type\.Boolean/);
-  assert.match(edit, /path:\s*Type\.Optional\(Type\.String/);
-  assert.match(edit, /edits:\s*Type\.Optional\(Type\.Array/);
+  assert.match(edit, /replace_all:\s*Type\.Optional\(\s*Type\.Boolean/);
+  assert.match(edit, /path:\s*Type\.Optional\(\s*Type\.String/);
+  assert.match(edit, /edits:\s*Type\.Optional\(\s*Type\.Array/);
   assert.match(edit, /prepareArguments:\s*prepareDeepSeekEditArgsForPi/);
 });
 
@@ -37,8 +40,8 @@ test("DeepSeek read definition uses Harness file_path/offset/limit schema", asyn
   const source = await sourcePromise;
   const read = block(source, "registerDeepSeekRead", "registerDeepSeekWrite");
   assert.match(read, /file_path:\s*Type\.String/);
-  assert.match(read, /offset:\s*Type\.Optional\(Type\.Number/);
-  assert.match(read, /limit:\s*Type\.Optional\(Type\.Number/);
+  assert.match(read, /offset:\s*Type\.Optional\(\s*Type\.Number/);
+  assert.match(read, /limit:\s*Type\.Optional\(\s*Type\.Number/);
 });
 
 test("write/edit use diff-call renderer instead of Pi native renderer", async () => {
@@ -50,7 +53,6 @@ test("write/edit use diff-call renderer instead of Pi native renderer", async ()
   assert.match(edit, /renderMutationCall\("edit"/);
   assert.match(edit, /renderMutationResult\("edit"/);
 });
-
 
 test("DeepSeek write/edit force the default boxed shell instead of inheriting Pi built-in shells", async () => {
   const source = await sourcePromise;

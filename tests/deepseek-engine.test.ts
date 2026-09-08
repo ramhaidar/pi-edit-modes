@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatDeepSeekFileView, insertAfterLine, uniqueExactReplace } from "../src/tools/deepseek/engine.ts";
+import {
+  formatDeepSeekFileView,
+  insertAfterLine,
+  uniqueExactReplace,
+} from "../src/tools/deepseek/engine.ts";
 
 test("deepseek exact replacement requires a unique match", () => {
   assert.equal(uniqueExactReplace("a\nb\nc", "b", "B").content, "a\nB\nc");

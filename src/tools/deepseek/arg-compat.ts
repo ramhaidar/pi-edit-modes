@@ -27,6 +27,17 @@ export interface NormalizedDeepSeekEditArgs {
   replaceAll: boolean;
 }
 
+export interface PreparedDeepSeekEditArgs {
+  file_path: string;
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
+  path: string;
+  oldText: string;
+  newText: string;
+  edits: Array<{ oldText: string; newText: string; replaceAll?: boolean }>;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -88,7 +99,8 @@ export function normalizeDeepSeekEditArgs(input: DeepSeekEditArgs): NormalizedDe
       if (oldString === undefined && typeof record.oldText === "string") oldString = record.oldText;
       if (newString === undefined && typeof record.newText === "string") newString = record.newText;
       const nestedReplaceAll = optionalBoolean(record.replaceAll, "edits[0].replaceAll");
-      if (nestedReplaceAll !== undefined && input.replace_all === undefined) replaceAll = nestedReplaceAll;
+      if (nestedReplaceAll !== undefined && input.replace_all === undefined)
+        replaceAll = nestedReplaceAll;
     }
   }
 
@@ -109,7 +121,11 @@ export function normalizeDeepSeekEditArgs(input: DeepSeekEditArgs): NormalizedDe
  * rewrites the advertised write schema back to the exact DeepSeek Harness wire
  * shape, so the model never sees the compatibility fields.
  */
-export function prepareDeepSeekWriteArgsForPi(raw: unknown): Record<string, unknown> {
+export function prepareDeepSeekWriteArgsForPi(raw: unknown): {
+  file_path: string;
+  content: string;
+  path: string;
+} {
   const input = asRecord(raw);
   const normalized = normalizeDeepSeekWriteArgs(input);
   return {
@@ -120,16 +136,16 @@ export function prepareDeepSeekWriteArgsForPi(raw: unknown): Record<string, unkn
 }
 
 /** See prepareDeepSeekWriteArgsForPi. */
-export function prepareDeepSeekEditArgsForPi(raw: unknown): Record<string, unknown> {
+export function prepareDeepSeekEditArgsForPi(raw: unknown): PreparedDeepSeekEditArgs {
   const input = asRecord(raw);
   const normalized = normalizeDeepSeekEditArgs(input);
-  const edit: Record<string, unknown> = {
+  const edit: PreparedDeepSeekEditArgs["edits"][number] = {
     oldText: normalized.oldString,
     newText: normalized.newString,
   };
   if (normalized.replaceAll) edit.replaceAll = true;
 
-  const prepared: Record<string, unknown> = {
+  const prepared: PreparedDeepSeekEditArgs = {
     file_path: normalized.filePath,
     old_string: normalized.oldString,
     new_string: normalized.newString,
@@ -138,7 +154,8 @@ export function prepareDeepSeekEditArgsForPi(raw: unknown): Record<string, unkno
     newText: normalized.newString,
     edits: [edit],
   };
-  if (input.replace_all !== undefined || normalized.replaceAll) prepared.replace_all = normalized.replaceAll;
+  if (input.replace_all !== undefined || normalized.replaceAll)
+    prepared.replace_all = normalized.replaceAll;
   return prepared;
 }
 
@@ -149,26 +166,37 @@ export function prepareDeepSeekEditArgsForPi(raw: unknown): Record<string, unkno
  */
 export function addPiMutationAliases(toolName: string, input: Record<string, unknown>): void {
   if (toolName === "write") {
-    if (typeof input.file_path === "string" && typeof input.path !== "string") input.path = input.file_path;
-    if (typeof input.path === "string" && typeof input.file_path !== "string") input.file_path = input.path;
+    if (typeof input.file_path === "string" && typeof input.path !== "string")
+      input.path = input.file_path;
+    if (typeof input.path === "string" && typeof input.file_path !== "string")
+      input.file_path = input.path;
     return;
   }
 
   if (toolName !== "edit") return;
-  if (typeof input.file_path === "string" && typeof input.path !== "string") input.path = input.file_path;
-  if (typeof input.path === "string" && typeof input.file_path !== "string") input.file_path = input.path;
+  if (typeof input.file_path === "string" && typeof input.path !== "string")
+    input.path = input.file_path;
+  if (typeof input.path === "string" && typeof input.file_path !== "string")
+    input.file_path = input.path;
 
-  if (typeof input.old_string === "string" && typeof input.oldText !== "string") input.oldText = input.old_string;
-  if (typeof input.new_string === "string" && typeof input.newText !== "string") input.newText = input.new_string;
-  if (typeof input.oldText === "string" && typeof input.old_string !== "string") input.old_string = input.oldText;
-  if (typeof input.newText === "string" && typeof input.new_string !== "string") input.new_string = input.newText;
+  if (typeof input.old_string === "string" && typeof input.oldText !== "string")
+    input.oldText = input.old_string;
+  if (typeof input.new_string === "string" && typeof input.newText !== "string")
+    input.newText = input.new_string;
+  if (typeof input.oldText === "string" && typeof input.old_string !== "string")
+    input.old_string = input.oldText;
+  if (typeof input.newText === "string" && typeof input.new_string !== "string")
+    input.new_string = input.newText;
 
   if (
-    !Array.isArray(input.edits)
-    && typeof input.old_string === "string"
-    && typeof input.new_string === "string"
+    !Array.isArray(input.edits) &&
+    typeof input.old_string === "string" &&
+    typeof input.new_string === "string"
   ) {
-    const edit: Record<string, unknown> = { oldText: input.old_string, newText: input.new_string };
+    const edit: PreparedDeepSeekEditArgs["edits"][number] = {
+      oldText: input.old_string,
+      newText: input.new_string,
+    };
     if (typeof input.replace_all === "boolean") edit.replaceAll = input.replace_all;
     input.edits = [edit];
   }

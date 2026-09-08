@@ -10,7 +10,10 @@ export interface DeepSeekRuntimeScope {
 
 export function getDeepSeekFsRuntime(scope: string | DeepSeekRuntimeScope): DeepSeekFsParity {
   const cwd = typeof scope === "string" ? scope : scope.cwd;
-  const sessionId = typeof scope === "string" ? "__legacy__" : scope.sessionManager?.getSessionId() ?? "__unknown_session__";
+  const sessionId =
+    typeof scope === "string"
+      ? "__legacy__"
+      : (scope.sessionManager?.getSessionId() ?? "__unknown_session__");
   const workspace = resolve(cwd);
   const key = `${sessionId}\0${workspace}`;
   let runtime = runtimes.get(key);
