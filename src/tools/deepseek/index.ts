@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { generateDiffString, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -59,14 +59,17 @@ async function directoryListing(displayPath: string, targetKey: string, signal?:
       if (signal?.aborted) throw new Error("list aborted");
       const actualChild = resolve(actualDir, entry.name);
       const displayChild = resolve(displayDir, entry.name);
-      let type: "file" | "directory" | "other" = "other";
+      let type: "file" | "directory" | "symlink" | "other" = "other";
       try {
-        const info = await stat(actualChild);
-        type = info.isDirectory() ? "directory" : info.isFile() ? "file" : "other";
+        // Do not follow directory symlinks here. editorView has already resolved
+        // and fenced the requested root; recursive traversal must not escape that
+        // fence through a child link.
+        const info = await lstat(actualChild);
+        type = info.isSymbolicLink() ? "symlink" : info.isDirectory() ? "directory" : info.isFile() ? "file" : "other";
       } catch {
         type = "other";
       }
-      rows.push(`${type === "directory" ? "d" : type === "file" ? "f" : "?"}\t${displayChild}`);
+      rows.push(`${type === "directory" ? "d" : type === "file" ? "f" : type === "symlink" ? "l" : "?"}\t${displayChild}`);
       if (type === "directory" && depth < 2) rows.push(...await visit(displayChild, actualChild, depth + 1));
     }
     return rows;
@@ -146,7 +149,7 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
     renderResult,
     executionMode: "parallel",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const runtime = getDeepSeekFsRuntime(ctx.cwd);
+      const runtime = getDeepSeekFsRuntime(ctx);
 
       if (params.command === "view") {
         const targetPath = requireAbsolute(params.path);
