@@ -38,7 +38,7 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 
 - There is no build step; the package ships TypeScript source directly. `pnpm typecheck`, `pnpm lint`, and CI are quality gates rather than build outputs.
 - `pnpm check` runs format check, typecheck, lint, and tests in that order.
-- GitHub Actions runs frozen install, typecheck, lint, and tests on Node 22 and Node 24.
+- GitHub Actions runs frozen install, format check, typecheck, lint, and tests on Node 22 and Node 24.
 - Tests run on Node's built-in runner with `--experimental-strip-types` (see `package.json` `scripts.test`).
 - `tsconfig.json` includes both `src/` and `tests/`; test files must typecheck too (`@types/node` is a devDependency for `node:test`/`node:assert`).
 - Prettier (`.prettierrc.json` + `.prettierignore`) is the formatter. `src/tools/codex/engine.ts`, `vendor/`, and `pnpm-lock.yaml` are excluded from formatting (see Code Style / Safety).
@@ -60,7 +60,7 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
   - Mode precedence: `--tool-mode` CLI → `/tool-mode` session → `x-pi-tool-mode` in `models.json` → auto-detection → `defaultMode` from `~/.pi/agent/edit-modes.json`.
 - `src/modes/router.ts` — universal tool-surface router (`replace`/`additive`) and native-tool ownership. Strict `replace` surfaces are authoritative and remove forbidden native tools again if another extension reactivates them; tools excluded from Pi's registry are never resurrected.
 - `src/modes/provider-guard.ts` — `before_provider_request` payload filtering per mode, including OpenAI/Anthropic top-level tool arrays and native Google `functionDeclarations`.
-- `src/tools/codex|gemini|deepseek/` — per-model tool engines. Gemini uses current `replace`/`write_file` vocabulary and a proposal/correction/approval lifecycle. DeepSeek `standard` replaces Pi's `read`/`write`/`edit` definitions and conditionally adds `read_image`; `minimal` exposes `str_replace_editor` instead. Leaving DeepSeek restores Pi's definitions.
+- `src/tools/codex|gemini|deepseek/` — per-model tool engines. Gemini uses current `replace`/`write_file` vocabulary, upstream omission/line-ending/result-context semantics, model-family contracts, and a session-scoped proposal/correction/approval lifecycle. DeepSeek `standard` replaces Pi's `read`/`write`/`edit` definitions and conditionally adds `read_image`; `minimal` exposes `str_replace_editor` instead. Leaving DeepSeek restores Pi's definitions.
 - `src/tools/deepseek/fs-parity.ts`, `arg-compat.ts`, `win32.ts` — Harness parity, Pi-host argument aliases, and Windows-specific behavior (koffi/advapi32/kernel32).
 - `src/ui/` — `/tool-mode` and `/tool-surface` command + settings overlay.
 - `vendor/` — fetched upstream sources (openai/codex, google-gemini/gemini-cli, deepseek-ai/deepseek-harness) used as parity reference material; not part of the published package.

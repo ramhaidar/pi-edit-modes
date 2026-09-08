@@ -153,7 +153,7 @@ Replacement recovery follows this order:
 3. token-whitespace regex recovery
 4. bounded fuzzy recovery
 
-By default a replacement must resolve to one intended match. `allow_multiple=true` permits replacing all accepted matches. Existing file line endings are preserved.
+By default a replacement must resolve to one intended match. `allow_multiple=true` permits replacing all accepted matches. Existing file line endings are preserved; newly created files use the host OS line ending, matching Gemini CLI (`CRLF` on Windows, `LF` elsewhere).
 
 If `old_string` is empty and the target does not exist, `replace` creates the file from `new_string`, matching current Gemini CLI create semantics. If the file already exists, an empty `old_string` is rejected. If all normal matching strategies fail on an eligible non-JSON-family file and `gemini.disableLLMCorrection=false`, the extension performs a bounded utility-model correction pass using `instruction`, the failure, and the latest on-disk file content, then retries the replacement against that fresh content.
 
@@ -164,7 +164,7 @@ Model-facing parameters are exactly `file_path` and `content`.
 - missing target: create
 - existing target: overwrite
 - no hidden overwrite flag is required
-- omission placeholders such as `(rest of file unchanged)` are rejected because `content` must be complete
+- omission placeholders use Gemini CLI's line-based detector: forms such as `(rest of methods ...)`, `(unchanged code ...)`, and `// rest of methods ...` are rejected; the ellipsis is required. `replace.new_string` may preserve a normalized placeholder only when the same placeholder already exists in `old_string`
 - eligible non-JSON-family content follows Gemini CLI's correction policy: with LLM correction enabled it can use the utility escaping corrector; with correction disabled, current Gemini 2/3 and custom models keep the original content while older Gemini families may use deterministic aggressive unescape
 
 Both Gemini mutation tools use the shared secure filesystem facade and file mutation queue.
@@ -173,10 +173,12 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 
 `gemini.approval` defaults to `ask_user`.
 
-- `ask_user`: the extension calculates the proposed mutation first, including recovery/correction, generates the diff, shows it for approval, and allows the user to replace the full proposed content before commit. A non-interactive session fails closed because approval cannot be obtained.
+- `ask_user`: the extension calculates the proposed mutation first, including recovery/correction, generates the diff, and shows it for approval. For `write_file`, the user may edit the complete proposed `content`; for `replace`, the editable confirmation value is the actual proposed `new_string`, matching Gemini CLI. The modified value is revalidated before commit. A non-interactive session fails closed because approval cannot be obtained.
 - `auto_edit`: the same proposal/recovery pipeline still runs, including correction only when enabled, but the extension skips the interactive approval UI.
 
-The executor commits only the prepared proposal for that tool call and verifies that the on-disk preimage has not changed since proposal calculation, so an edit approved against stale content is rejected instead of silently clobbering external changes.
+The executor commits only the prepared proposal for that tool call and verifies that the on-disk preimage has not changed since proposal calculation, so an edit approved against stale content is rejected instead of silently clobbering external changes. Prepared proposals are keyed by Pi session ID plus workspace path plus tool-call ID and are cleared on session start/shutdown, preventing approval state from leaking across sessions.
+
+Successful `replace` and `write_file` results sent back to the model include a bounded updated-code context snippet. If confirmation changed `new_string` or `content`, the result also reports the exact value that was actually approved and written, so the model sees the final mutation without requiring an immediate read-back.
 
 ## DeepSeek semantics
 
@@ -235,7 +237,7 @@ Before each provider request, the extension treats the selected strict roster as
 
 - Pi mode removes managed custom file-edit tools.
 - Codex mode removes Gemini and DeepSeek custom tools and validates `apply_patch` transport.
-- Gemini mode removes Codex, DeepSeek, deprecated Gemini aliases, and native `edit`/`write` on the strict surface.
+- Gemini mode removes Codex, DeepSeek, deprecated Gemini aliases, and native `edit`/`write` on the strict surface. It also rewrites `replace`/`write_file` descriptions and parameter descriptions to the active upstream Gemini model-family contract before each provider request.
 - DeepSeek `standard` strict mode removes Codex, Gemini, and `str_replace_editor`; it keeps the standard Harness filesystem family.
 - DeepSeek `minimal` strict mode removes Codex, Gemini, and native `read`/`edit`/`write`; it keeps `str_replace_editor`.
 - OpenAI/Anthropic-style top-level tool arrays and native Google `config.tools[].functionDeclarations[]` are handled.
@@ -252,14 +254,15 @@ Codex, Gemini, and DeepSeek mutation tools expose generated diffs through the sh
 ## Quality gates
 
 ```bash
+pnpm format:check
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm check
 ```
 
-`pnpm typecheck` uses the repository `tsconfig.json`. `pnpm lint` runs Oxlint with warnings denied across `src` and `tests`. GitHub Actions runs install, typecheck, lint, and tests on Node 22 and Node 24.
+`pnpm check` runs Prettier format checking, TypeScript typechecking, Oxlint with warnings denied across `src` and `tests`, and the full Node test suite. GitHub Actions runs the same gates after a frozen install on Node 22 and Node 24.
 
-Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini create/recovery/correction/approval behavior, DeepSeek observation and stale-version semantics, session isolation, exclusive mutation scheduling, large-file streaming, image validation/normalization, `str_replace_editor`, Codex Environment ID grammar/execution rejection on a single-environment host, and diff rendering.
+Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini create/recovery/correction/approval behavior, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings; DeepSeek observation and stale-version semantics, session isolation, exclusive mutation scheduling, large-file streaming, image validation/normalization, `str_replace_editor`; Codex Environment ID grammar/execution rejection on a single-environment host; and diff rendering.
 
 Two filesystem parity tests are skipped on platforms where the required POSIX mode/symlink behavior cannot be exercised by the current test environment.

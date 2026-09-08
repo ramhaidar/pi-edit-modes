@@ -17,7 +17,7 @@ import {
   guardCodexProviderPayload,
 } from "./tools/codex/engine.ts";
 import { registerGeminiTools } from "./tools/gemini/index.ts";
-import { handleGeminiToolCall } from "./tools/gemini/lifecycle.ts";
+import { clearGeminiPreparedMutations, handleGeminiToolCall } from "./tools/gemini/lifecycle.ts";
 import { registerDeepSeekTool } from "./tools/deepseek/index.ts";
 import {
   clearDeepSeekFsRuntimes,
@@ -486,6 +486,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    clearGeminiPreparedMutations(ctx);
     if (parsedCli.warning) warn(ctx, parsedCli.warning);
     if (parsedSurfaceCli.warning) warn(ctx, parsedSurfaceCli.warning);
     if (legacy.warning) warn(ctx, legacy.warning);
@@ -533,13 +534,13 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     if (guarded.changed) return guarded.payload;
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (_event, ctx) => {
+    clearGeminiPreparedMutations(ctx);
     if (filesystemToolFlavor === "deepseek") {
       registerPiFilesystemTools(pi, process.cwd());
       filesystemToolFlavor = "pi";
-    } else {
-      clearDeepSeekFsRuntimes();
     }
+    clearDeepSeekFsRuntimes();
     const available = configuredToolNames(pi);
     const transition = computeToolTransition({
       activeTools: pi.getActiveTools(),

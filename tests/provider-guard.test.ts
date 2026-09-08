@@ -5,6 +5,7 @@ import {
   guardProviderPayload,
   type ProviderGuardResult,
 } from "../src/modes/provider-guard.ts";
+import { getGeminiToolContract } from "../src/tools/gemini/upstream-parity.ts";
 
 const compatibilitySupport = { supported: true, transport: "compatibility" as const };
 const unavailableSupport = { supported: false };
@@ -14,13 +15,38 @@ const passthroughCodexGuard = (payload: unknown): ProviderGuardResult => ({
 });
 
 function declaration(name: string, description = `${name} description`) {
+  const properties =
+    name === "apply_patch"
+      ? { input: { type: "string" } }
+      : name === "replace"
+        ? {
+            file_path: { type: "string", description: "stale" },
+            instruction: { type: "string", description: "stale" },
+            old_string: { type: "string", description: "stale" },
+            new_string: { type: "string", description: "stale" },
+            allow_multiple: { type: "boolean", description: "stale" },
+          }
+        : name === "write_file"
+          ? {
+              file_path: { type: "string", description: "stale" },
+              content: { type: "string", description: "stale" },
+            }
+          : {};
+  const required =
+    name === "apply_patch"
+      ? ["input"]
+      : name === "replace"
+        ? ["file_path", "instruction", "old_string", "new_string"]
+        : name === "write_file"
+          ? ["file_path", "content"]
+          : [];
   return {
     name,
     description,
     parametersJsonSchema: {
       type: "object",
-      properties: name === "apply_patch" ? { input: { type: "string" } } : {},
-      required: name === "apply_patch" ? ["input"] : [],
+      properties,
+      required,
       additionalProperties: false,
     },
   };
@@ -79,11 +105,18 @@ test("Gemini provider descriptions follow the active model family", () => {
     activeTools: ["replace", "write_file"],
     modelId: "gemini-3-pro",
   });
-  const gemini3Descriptions = (gemini3.payload as any).config.tools[0].functionDeclarations.map(
-    (item: any) => item.description,
+  const gemini3Declarations = (gemini3.payload as any).config.tools[0].functionDeclarations;
+  const gemini3Contract = getGeminiToolContract("gemini-3-pro");
+  assert.equal(gemini3Declarations[0].description, gemini3Contract.replace.description);
+  assert.equal(gemini3Declarations[1].description, gemini3Contract.write_file.description);
+  assert.equal(
+    gemini3Declarations[0].parametersJsonSchema.properties.new_string.description,
+    gemini3Contract.replace.parameters.new_string,
   );
-  assert.match(gemini3Descriptions[0], /surgical edits/i);
-  assert.match(gemini3Descriptions[1], /parent directories/i);
+  assert.equal(
+    gemini3Declarations[1].parametersJsonSchema.properties.content.description,
+    gemini3Contract.write_file.parameters.content,
+  );
 
   const legacy = guardProviderPayload({
     payload,
@@ -93,11 +126,15 @@ test("Gemini provider descriptions follow the active model family", () => {
     activeTools: ["replace", "write_file"],
     modelId: "gemini-2.5-pro",
   });
-  const legacyDescriptions = (legacy.payload as any).config.tools[0].functionDeclarations.map(
-    (item: any) => item.description,
+  const legacyDeclarations = (legacy.payload as any).config.tools[0].functionDeclarations;
+  const legacyContract = getGeminiToolContract("gemini-2.5-pro");
+  assert.equal(legacyDeclarations[0].description, legacyContract.replace.description);
+  assert.equal(legacyDeclarations[1].description, legacyContract.write_file.description);
+  assert.equal(
+    legacyDeclarations[0].parametersJsonSchema.properties.old_string.description,
+    legacyContract.replace.parameters.old_string,
   );
-  assert.match(legacyDescriptions[0], /read the current file first/i);
-  assert.notEqual(legacyDescriptions[0], gemini3Descriptions[0]);
+  assert.notEqual(legacyDeclarations[0].description, gemini3Declarations[0].description);
 });
 
 test("Codex mode rewrites Google apply_patch compatibility description", () => {

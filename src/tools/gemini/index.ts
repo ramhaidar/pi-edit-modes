@@ -6,7 +6,8 @@ import {
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { withSharedSecureFilesystem } from "../codex/engine.ts";
-import { calculateGeminiMutation, geminiDescriptions, takeGeminiMutation } from "./lifecycle.ts";
+import { calculateGeminiMutation, takeGeminiMutation } from "./lifecycle.ts";
+import { getDiffContextSnippet, getGeminiToolContract } from "./upstream-parity.ts";
 import {
   DiffCallRenderComponent,
   displayToolPath,
@@ -71,18 +72,12 @@ function renderGeminiResult(result: any, options: any, theme: any, context?: any
   );
 }
 
-function containsOmissionPlaceholder(content: string): boolean {
-  return /\(\s*(?:rest|remaining|unchanged)\s+(?:of\s+)?(?:the\s+)?(?:code|file|content|methods?|implementation)[^)]*\)/iu.test(
-    content,
-  );
-}
-
 export function registerGeminiTools(pi: ExtensionAPI): void {
-  const descriptions = geminiDescriptions();
+  const contract = getGeminiToolContract();
   pi.registerTool({
     name: "replace",
     label: "replace",
-    description: descriptions.replace,
+    description: contract.replace.description,
     promptSnippet: "Use replace for surgical edits to existing files.",
     promptGuidelines: [
       "old_string and new_string are literal, unescaped text.",
@@ -91,16 +86,12 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
     ],
     parameters: Type.Object(
       {
-        file_path: Type.String({ description: "The path to the file to modify." }),
-        instruction: Type.String({
-          description: "A clear, self-contained semantic instruction for the code change.",
-        }),
-        old_string: Type.String({ description: "The exact literal text to replace, unescaped." }),
-        new_string: Type.String({ description: "The exact literal replacement text, unescaped." }),
+        file_path: Type.String({ description: contract.replace.parameters.file_path }),
+        instruction: Type.String({ description: contract.replace.parameters.instruction }),
+        old_string: Type.String({ description: contract.replace.parameters.old_string }),
+        new_string: Type.String({ description: contract.replace.parameters.new_string }),
         allow_multiple: Type.Optional(
-          Type.Boolean({
-            description: "Replace all occurrences of old_string. Defaults to false.",
-          }),
+          Type.Boolean({ description: contract.replace.parameters.allow_multiple }),
         ),
       },
       { additionalProperties: false },
@@ -119,7 +110,7 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
     executionMode: "sequential",
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const mutation =
-        takeGeminiMutation(toolCallId) ??
+        takeGeminiMutation(toolCallId, ctx) ??
         (await calculateGeminiMutation(toolCallId, "replace", params, ctx, signal));
       return withFileMutationQueue(mutation.absolutePath, () =>
         withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
@@ -137,18 +128,29 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
               ? ` using ${mutation.strategy} recovery`
               : "";
           const correction = mutation.corrected ? " after edit correction" : "";
-          const userEdit = mutation.modifiedByUser ? " with user-modified proposed content" : "";
           const count = mutation.occurrences ?? 0;
+          const successParts = [
+            mutation.before === undefined
+              ? `Successfully created and wrote to new file: ${mutation.absolutePath}.`
+              : count === 0
+                ? `No changes required for ${params.file_path}.${correction}`
+                : `Successfully modified file: ${mutation.absolutePath} (${count} replacements).`,
+          ];
+          if (mutation.modifiedByUser) {
+            successParts.push(
+              `The confirmation step modified the \`new_string\` content to be: ${mutation.effectiveNewString ?? ""}.`,
+            );
+          }
+          if (mutation.before === undefined || mutation.after !== mutation.before) {
+            successParts.push(
+              `Here is the updated code:\n${getDiffContextSnippet(mutation.before ?? "", mutation.after, 5)}`,
+            );
+          }
           return {
             content: [
               {
                 type: "text",
-                text:
-                  mutation.before === undefined
-                    ? `Created ${params.file_path} via replace.${userEdit}`
-                    : count === 0
-                      ? `No changes required for ${params.file_path}.${correction}`
-                      : `Edited ${params.file_path}: ${count} replacement${count === 1 ? "" : "s"}${strategy}${correction}${userEdit}.`,
+                text: `${successParts.join(" ")}${strategy}`,
               },
             ],
             details: resultDetails(
@@ -167,15 +169,15 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "write_file",
     label: "write_file",
-    description: descriptions.write_file,
+    description: contract.write_file.description,
     promptSnippet: "Use write_file to create or fully rewrite a file.",
     promptGuidelines: [
       "Provide the complete file content. Do not use omission placeholders for unchanged sections.",
     ],
     parameters: Type.Object(
       {
-        file_path: Type.String({ description: "The path to the file to write." }),
-        content: Type.String({ description: "The complete content to write to the file." }),
+        file_path: Type.String({ description: contract.write_file.parameters.file_path }),
+        content: Type.String({ description: contract.write_file.parameters.content }),
       },
       { additionalProperties: false },
     ),
@@ -192,13 +194,8 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
     renderResult: renderGeminiResult,
     executionMode: "sequential",
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
-      if (containsOmissionPlaceholder(params.content)) {
-        throw new Error(
-          "write_file content contains an omission placeholder; provide the complete literal file content",
-        );
-      }
       const mutation =
-        takeGeminiMutation(toolCallId) ??
+        takeGeminiMutation(toolCallId, ctx) ??
         (await calculateGeminiMutation(toolCallId, "write_file", params, ctx, signal));
       return withFileMutationQueue(mutation.absolutePath, () =>
         withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
@@ -212,12 +209,26 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
           else if (mutation.after !== mutation.before)
             await fs.writeFile(mutation.absolutePath, mutation.after, false, signal);
           const correction = mutation.corrected ? " after content correction" : "";
-          const userEdit = mutation.modifiedByUser ? " with user-modified proposed content" : "";
+          const successParts = [
+            mutation.before === undefined
+              ? `Successfully created and wrote to new file: ${mutation.absolutePath}.`
+              : `Successfully overwrote file: ${mutation.absolutePath}.`,
+          ];
+          if (mutation.modifiedByUser) {
+            successParts.push(
+              `User modified the \`content\` to be: ${mutation.effectiveContent ?? ""}`,
+            );
+          }
+          if (mutation.before === undefined || mutation.after !== mutation.before) {
+            successParts.push(
+              `Here is the updated code:\n${getDiffContextSnippet(mutation.before ?? "", mutation.after, 5)}`,
+            );
+          }
           return {
             content: [
               {
                 type: "text",
-                text: `${mutation.before === undefined ? "Created" : "Overwrote"} ${params.file_path}${correction}${userEdit}.`,
+                text: `${successParts.join(" ")}${correction}`,
               },
             ],
             details: resultDetails(

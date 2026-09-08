@@ -7,6 +7,10 @@ import {
   preserveReplacementLineEndings,
   type ReplacementStrategy,
 } from "./replacement-engine.ts";
+import {
+  normalizeNewFileLineEndings,
+  validateGeminiOmissionPlaceholders,
+} from "./upstream-parity.ts";
 
 export type GeminiMutationToolName = "replace" | "write_file";
 export interface PreparedGeminiMutation {
@@ -21,12 +25,33 @@ export interface PreparedGeminiMutation {
   strategy?: ReplacementStrategy;
   corrected?: boolean;
   modifiedByUser?: boolean;
+  effectiveOldString?: string;
+  effectiveNewString?: string;
+  effectiveContent?: string;
+  allowMultiple?: boolean;
+}
+
+export interface GeminiMutationScope {
+  cwd: string;
+  sessionManager?: { getSessionId(): string };
 }
 
 const prepared = new Map<string, PreparedGeminiMutation>();
 const JSON_FAMILY = new Set([".json", ".json5", ".jsonc", ".ipynb"]);
 const targetPath = (cwd: string, path: string) =>
   isAbsolute(path) ? resolve(path) : resolve(cwd, path);
+
+function mutationScopeKey(scope: GeminiMutationScope): string {
+  let sessionId = "__unknown_session__";
+  try {
+    sessionId = scope.sessionManager?.getSessionId() ?? sessionId;
+  } catch {}
+  return `${sessionId}\0${resolve(scope.cwd)}`;
+}
+
+function preparedKey(toolCallId: string, scope: GeminiMutationScope): string {
+  return `${mutationScopeKey(scope)}\0${toolCallId}`;
+}
 
 function effectiveSignal(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(40_000);
@@ -184,6 +209,7 @@ export async function calculateGeminiMutation(
     const before = await fs.readFileOptional(absolutePath, signal);
     if (toolName === "write_file") {
       if (typeof params.content !== "string") throw new Error("content must be a string");
+      validateGeminiOmissionPlaceholders(toolName, params);
       const corrected = await correctWriteContent(
         ctx,
         filePath,
@@ -193,7 +219,7 @@ export async function calculateGeminiMutation(
       );
       const after =
         before === undefined
-          ? corrected.content
+          ? normalizeNewFileLineEndings(corrected.content)
           : preserveReplacementLineEndings(corrected.content, before);
       return {
         toolCallId,
@@ -204,6 +230,7 @@ export async function calculateGeminiMutation(
         after,
         action: before === undefined ? "A" : "M",
         corrected: corrected.corrected,
+        effectiveContent: corrected.content,
       };
     }
 
@@ -211,6 +238,7 @@ export async function calculateGeminiMutation(
     const newString = typeof params.new_string === "string" ? params.new_string : undefined;
     if (oldString === undefined || newString === undefined)
       throw new Error("old_string and new_string must be strings");
+    validateGeminiOmissionPlaceholders(toolName, params);
     if (before === undefined) {
       if (oldString !== "")
         throw new Error(
@@ -222,9 +250,12 @@ export async function calculateGeminiMutation(
         filePath,
         absolutePath,
         before,
-        after: newString,
+        after: normalizeNewFileLineEndings(newString),
         action: "A",
         occurrences: 1,
+        effectiveOldString: oldString,
+        effectiveNewString: newString,
+        allowMultiple: params.allow_multiple === true,
       };
     }
     if (oldString === "")
@@ -248,6 +279,9 @@ export async function calculateGeminiMutation(
         action: "M",
         occurrences: plan.occurrences,
         strategy: plan.strategy,
+        effectiveOldString: plan.finalOldString,
+        effectiveNewString: plan.finalNewString,
+        allowMultiple: params.allow_multiple === true,
       };
     } catch (initial) {
       const error = initial instanceof Error ? initial : new Error(String(initial));
@@ -267,6 +301,9 @@ export async function calculateGeminiMutation(
           action: "M",
           occurrences: 0,
           corrected: true,
+          effectiveOldString: oldString,
+          effectiveNewString: newString,
+          allowMultiple: params.allow_multiple === true,
         };
       const retry = planSingleReplacement(latest, {
         file_path: filePath,
@@ -286,6 +323,9 @@ export async function calculateGeminiMutation(
         occurrences: retry.occurrences,
         strategy: retry.strategy,
         corrected: true,
+        effectiveOldString: retry.finalOldString,
+        effectiveNewString: retry.finalNewString,
+        allowMultiple: params.allow_multiple === true,
       };
     }
   });
@@ -294,21 +334,79 @@ export async function calculateGeminiMutation(
 export function mutationDiff(mutation: PreparedGeminiMutation): string {
   return generateDiffString(mutation.before ?? "", mutation.after).diff;
 }
-export function rememberGeminiMutation(mutation: PreparedGeminiMutation): void {
-  prepared.set(mutation.toolCallId, mutation);
+export function rememberGeminiMutation(
+  mutation: PreparedGeminiMutation,
+  scope: GeminiMutationScope,
+): void {
+  prepared.set(preparedKey(mutation.toolCallId, scope), mutation);
 }
-export function takeGeminiMutation(toolCallId: string): PreparedGeminiMutation | undefined {
-  const value = prepared.get(toolCallId);
-  if (value) prepared.delete(toolCallId);
+export function takeGeminiMutation(
+  toolCallId: string,
+  scope: GeminiMutationScope,
+): PreparedGeminiMutation | undefined {
+  const key = preparedKey(toolCallId, scope);
+  const value = prepared.get(key);
+  if (value) prepared.delete(key);
   return value;
+}
+export function clearGeminiPreparedMutations(scope?: GeminiMutationScope): void {
+  if (!scope) {
+    prepared.clear();
+    return;
+  }
+  const prefix = `${mutationScopeKey(scope)}\0`;
+  for (const key of prepared.keys()) {
+    if (key.startsWith(prefix)) prepared.delete(key);
+  }
 }
 export function modifyGeminiMutation(
   mutation: PreparedGeminiMutation,
-  after: string,
+  editedContent: string,
 ): PreparedGeminiMutation {
-  const normalized =
-    mutation.before === undefined ? after : preserveReplacementLineEndings(after, mutation.before);
-  return { ...mutation, after: normalized, modifiedByUser: true };
+  if (mutation.toolName === "write_file") {
+    validateGeminiOmissionPlaceholders("write_file", { content: editedContent });
+    const after =
+      mutation.before === undefined
+        ? normalizeNewFileLineEndings(editedContent)
+        : preserveReplacementLineEndings(editedContent, mutation.before);
+    return {
+      ...mutation,
+      after,
+      effectiveContent: editedContent,
+      modifiedByUser: true,
+    };
+  }
+
+  if (mutation.before === undefined) {
+    return {
+      ...mutation,
+      after: normalizeNewFileLineEndings(editedContent),
+      effectiveNewString: editedContent,
+      modifiedByUser: true,
+    };
+  }
+
+  const oldString = mutation.effectiveOldString;
+  if (oldString === undefined)
+    throw new Error("replace proposal is missing its effective old_string");
+  validateGeminiOmissionPlaceholders("replace", {
+    old_string: oldString,
+    new_string: editedContent,
+  });
+  const replanned = planSingleReplacement(mutation.before, {
+    file_path: mutation.filePath,
+    old_string: oldString,
+    new_string: editedContent,
+    allow_multiple: mutation.allowMultiple === true,
+  });
+  return {
+    ...mutation,
+    after: replanned.content,
+    occurrences: replanned.occurrences,
+    strategy: replanned.strategy,
+    effectiveNewString: editedContent,
+    modifiedByUser: true,
+  };
 }
 
 export async function handleGeminiToolCall(
@@ -328,7 +426,7 @@ export async function handleGeminiToolCall(
     { disableLLMCorrection },
   );
   if (approval === "auto_edit") {
-    rememberGeminiMutation(mutation);
+    rememberGeminiMutation(mutation, ctx);
     return;
   }
 
@@ -355,7 +453,16 @@ export async function handleGeminiToolCall(
   if (action === "Reject" || action === undefined)
     return { block: true, reason: `User rejected Gemini ${event.toolName} for ${path}.` };
   if (action === "Edit proposed content") {
-    const edited = await ctx.ui.editor(`Edit proposed ${event.toolName}: ${path}`, mutation.after);
+    const editableContent =
+      event.toolName === "replace"
+        ? (mutation.effectiveNewString ?? String(event.input.new_string ?? ""))
+        : (mutation.effectiveContent ?? mutation.after);
+    const edited = await ctx.ui.editor(
+      event.toolName === "replace"
+        ? `Edit proposed new_string: ${path}`
+        : `Edit proposed write_file content: ${path}`,
+      editableContent,
+    );
     if (edited === undefined)
       return {
         block: true,
@@ -363,22 +470,5 @@ export async function handleGeminiToolCall(
       };
     approvedMutation = modifyGeminiMutation(mutation, edited);
   }
-  rememberGeminiMutation(approvedMutation);
-}
-
-export function geminiDescriptions(modelId?: string) {
-  const gemini3 = /(?:^|[-_/])gemini[-_]?3(?:\D|$)/i.test(modelId ?? "");
-  return gemini3
-    ? {
-        replace:
-          "Replaces text within a file. By default exactly one occurrence of old_string must change; set allow_multiple=true only when all matching occurrences should change. Prefer this for surgical edits, provide significant context, and note that the user may modify new_string before saving.",
-        write_file:
-          "Writes complete content to a file, creating missing parent directories and overwriting existing files. The user may modify content before saving. Prefer replace for targeted edits to larger files.",
-      }
-    : {
-        replace:
-          "Replaces literal text within a file. Read the current file first, provide substantial exact context, keep old_string/new_string unescaped, and use allow_multiple only when every match should change. The user may modify new_string before saving.",
-        write_file:
-          "Writes content to a specified file in the local filesystem. The user may modify content before saving.",
-      };
+  rememberGeminiMutation(approvedMutation, ctx);
 }

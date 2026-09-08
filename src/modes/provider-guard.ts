@@ -1,5 +1,5 @@
 import type { DeepSeekPreset, ToolMode } from "../config/types.ts";
-import { geminiDescriptions } from "../tools/gemini/lifecycle.ts";
+import { getGeminiToolContract, type GeminiToolContract } from "../tools/gemini/upstream-parity.ts";
 import {
   DEEPSEEK_TOOL_NAMES,
   DEPRECATED_GEMINI_TOOL_NAMES,
@@ -241,35 +241,70 @@ function stripTools(payload: unknown, forbidden: ReadonlySet<string>): ProviderG
   };
 }
 
-function rewriteWireToolDescription(
+function withGeminiParameterDescriptions(
+  schema: unknown,
+  descriptions: Record<string, string>,
+): { schema: unknown; changed: boolean } {
+  if (!isRecord(schema) || !isRecord(schema.properties)) return { schema, changed: false };
+  let changed = false;
+  const properties = { ...schema.properties };
+  for (const [name, description] of Object.entries(descriptions)) {
+    const property = properties[name];
+    if (!isRecord(property) || property.description === description) continue;
+    properties[name] = { ...property, description };
+    changed = true;
+  }
+  return changed
+    ? { schema: { ...schema, properties }, changed: true }
+    : { schema, changed: false };
+}
+
+function rewriteWireGeminiContract(
   tool: unknown,
-  descriptions: { replace: string; write_file: string },
+  contract: GeminiToolContract,
 ): { tool: unknown; changed: boolean } {
   const name = wireName(tool);
-  const description =
-    name === "replace"
-      ? descriptions.replace
-      : name === "write_file"
-        ? descriptions.write_file
-        : undefined;
-  if (!description || !isRecord(tool)) return { tool, changed: false };
+  const entry =
+    name === "replace" ? contract.replace : name === "write_file" ? contract.write_file : undefined;
+  if (!entry || !isRecord(tool)) return { tool, changed: false };
+
+  const rewriteOwner = (owner: Record<string, unknown>) => {
+    let nextOwner = owner;
+    let changed = owner.description !== entry.description;
+    if (changed) nextOwner = { ...nextOwner, description: entry.description };
+    for (const field of [
+      "parameters",
+      "parametersJsonSchema",
+      "inputSchema",
+      "input_schema",
+    ] as const) {
+      const rewritten = withGeminiParameterDescriptions(nextOwner[field], entry.parameters);
+      if (!rewritten.changed) continue;
+      nextOwner = { ...nextOwner, [field]: rewritten.schema };
+      changed = true;
+    }
+    return { owner: nextOwner, changed };
+  };
+
   if (isRecord(tool.function)) {
-    if (tool.function.description === description) return { tool, changed: false };
-    return { tool: { ...tool, function: { ...tool.function, description } }, changed: true };
+    const rewritten = rewriteOwner(tool.function);
+    return rewritten.changed
+      ? { tool: { ...tool, function: rewritten.owner }, changed: true }
+      : { tool, changed: false };
   }
-  if (tool.description === description) return { tool, changed: false };
-  return { tool: { ...tool, description }, changed: true };
+  const rewritten = rewriteOwner(tool);
+  return rewritten.changed ? { tool: rewritten.owner, changed: true } : { tool, changed: false };
 }
 
 function rewriteGeminiDescriptions(payload: unknown, modelId?: string): ProviderGuardResult {
   if (!isRecord(payload)) return { payload, changed: false };
-  const descriptions = geminiDescriptions(modelId);
+  const contract = getGeminiToolContract(modelId);
   let next = payload;
   let changed = false;
 
   if (Array.isArray(next.tools)) {
     const tools = next.tools.map((tool) => {
-      const rewritten = rewriteWireToolDescription(tool, descriptions);
+      const rewritten = rewriteWireGeminiContract(tool, contract);
       changed ||= rewritten.changed;
       return rewritten.tool;
     });
@@ -282,7 +317,7 @@ function rewriteGeminiDescriptions(payload: unknown, modelId?: string): Provider
       if (!isRecord(group) || !Array.isArray(group.functionDeclarations)) return group;
       let groupChanged = false;
       const declarations = group.functionDeclarations.map((declaration) => {
-        const rewritten = rewriteWireToolDescription(declaration, descriptions);
+        const rewritten = rewriteWireGeminiContract(declaration, contract);
         groupChanged ||= rewritten.changed;
         return rewritten.tool;
       });
