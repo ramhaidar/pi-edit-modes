@@ -1,3 +1,4 @@
+# Node Modules
 node_modules/
 
 # Vendored upstream repos (fetched by scripts/fetch-vendors.mjs)
@@ -7,3 +8,7 @@ vendor/
 .pnpm-store/
 pnpm-debug.log*
 .pnpm-debug.log*
+
+# Package Zip
+package.ps1
+pi-edit-modes-*.zip
