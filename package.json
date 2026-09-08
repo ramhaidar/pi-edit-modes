@@ -19,6 +19,11 @@
   },
   "scripts": {
     "fetch-vendors": "node scripts/fetch-vendors.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "oxlint --deny-warnings src tests",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "files": [
@@ -32,6 +37,9 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
+    "@types/node": "^26.4.1",
+    "oxlint": "^1.81.0",
+    "prettier": "^3.9.6",
     "typebox": "*",
     "typescript": "7.0.2"
   }
