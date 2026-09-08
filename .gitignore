@@ -2,3 +2,8 @@ node_modules/
 
 # Vendored upstream repos (fetched by scripts/fetch-vendors.mjs)
 vendor/
+
+# pnpm
+.pnpm-store/
+pnpm-debug.log*
+.pnpm-debug.log*
