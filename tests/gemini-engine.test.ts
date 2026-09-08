@@ -1,14 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planSingleReplacement, preserveReplacementLineEndings } from "../src/tools/gemini/replacement-engine.ts";
+import {
+  planSingleReplacement,
+  preserveReplacementLineEndings,
+} from "../src/tools/gemini/replacement-engine.ts";
 import { registerGeminiTools } from "../src/tools/gemini/index.ts";
 
 test("Gemini replace uses exact current CLI parameter vocabulary", () => {
   const tools: any[] = [];
   registerGeminiTools({ registerTool: (tool: any) => tools.push(tool) } as any);
-  assert.deepEqual(tools.map((tool) => tool.name), ["replace", "write_file"]);
-  assert.deepEqual(Object.keys(tools[0].parameters.properties), ["file_path", "instruction", "old_string", "new_string", "allow_multiple"]);
-  assert.deepEqual(tools[0].parameters.required, ["file_path", "instruction", "old_string", "new_string"]);
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["replace", "write_file"],
+  );
+  assert.deepEqual(Object.keys(tools[0].parameters.properties), [
+    "file_path",
+    "instruction",
+    "old_string",
+    "new_string",
+    "allow_multiple",
+  ]);
+  assert.deepEqual(tools[0].parameters.required, [
+    "file_path",
+    "instruction",
+    "old_string",
+    "new_string",
+  ]);
   assert.deepEqual(Object.keys(tools[1].parameters.properties), ["file_path", "content"]);
   assert.deepEqual(tools[1].parameters.required, ["file_path", "content"]);
 });
@@ -26,15 +43,26 @@ test("single unique exact match", () => {
 });
 
 test("missing target fails", () => {
-  assert.throws(() => planSingleReplacement("abc", {
-    old_string: "x",
-    new_string: "y",
-  }), /Could not find/);
+  assert.throws(
+    () =>
+      planSingleReplacement("abc", {
+        old_string: "x",
+        new_string: "y",
+      }),
+    /Could not find/,
+  );
 });
 
 test("duplicate target requires allow_multiple", () => {
-  assert.throws(() => planSingleReplacement("x x", { old_string: "x", new_string: "y" }), /expected 1 occurrence but found 2/i);
-  const plan = planSingleReplacement("x x", { old_string: "x", new_string: "y", allow_multiple: true });
+  assert.throws(
+    () => planSingleReplacement("x x", { old_string: "x", new_string: "y" }),
+    /expected 1 occurrence but found 2/i,
+  );
+  const plan = planSingleReplacement("x x", {
+    old_string: "x",
+    new_string: "y",
+    allow_multiple: true,
+  });
   assert.equal(plan.content, "y y");
   assert.equal(plan.occurrences, 2);
 });
