@@ -60,7 +60,7 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
   - Mode precedence: `--tool-mode` CLI → `/tool-mode` session → `x-pi-tool-mode` in `models.json` → auto-detection → `defaultMode` from `~/.pi/agent/edit-modes.json`.
 - `src/modes/router.ts` — universal tool-surface router (`replace`/`additive`) and native-tool ownership. Strict `replace` surfaces are authoritative and remove forbidden native tools again if another extension reactivates them; tools excluded from Pi's registry are never resurrected.
 - `src/modes/provider-guard.ts` — `before_provider_request` payload filtering per mode, including OpenAI/Anthropic top-level tool arrays and native Google `functionDeclarations`.
-- `src/tools/codex|gemini|deepseek/` — per-model tool engines. Gemini uses current `replace`/`write_file` vocabulary, upstream omission/line-ending/result-context semantics, model-family contracts, and a session-scoped proposal/correction/approval lifecycle. DeepSeek `standard` replaces Pi's `read`/`write`/`edit` definitions and conditionally adds `read_image`; `minimal` exposes `str_replace_editor` instead. Leaving DeepSeek restores Pi's definitions.
+- `src/tools/codex|gemini|deepseek/` — per-model tool engines. Gemini uses current `replace`/`write_file` vocabulary, upstream omission/line-ending/result-context semantics, model-family contracts, session-scoped proposal state, whole-proposed-file manual modification, correction no-change errors, and fuzzy line-range feedback. Gemini CLI JIT subdirectory context remains a host-context divergence because Pi does not expose Gemini's trusted memory-context discovery service. DeepSeek `standard` replaces Pi's `read`/`write`/`edit` definitions and conditionally adds `read_image`; `minimal` exposes `str_replace_editor` instead. Leaving DeepSeek restores Pi's definitions.
 - `src/tools/deepseek/fs-parity.ts`, `arg-compat.ts`, `win32.ts` — Harness parity, Pi-host argument aliases, and Windows-specific behavior (koffi/advapi32/kernel32).
 - `src/ui/` — `/tool-mode` and `/tool-surface` command + settings overlay.
 - `vendor/` — fetched upstream sources (openai/codex, google-gemini/gemini-cli, deepseek-ai/deepseek-harness) used as parity reference material; not part of the published package.
@@ -70,7 +70,7 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 - `vendor/` is generated: never hand-edit; regenerate with `pnpm fetch-vendors` (`--force` to refresh even when the recorded SHA matches).
 - `vendor/.state.json` records fetched SHAs; it is managed by the fetch script.
 - Treat the Codex engine as a preserved upstream baseline (see Code Style) — behavior-parity changes there need explicit justification and test coverage.
-- Behavior changes to tool schemas/semantics (Gemini exact/flexible/regex/fuzzy + correction flow, DeepSeek observation/version guards, provider-guard stripping) must be reflected in `tests/` and, where user-visible, in `README.md`.
+- Behavior changes to tool schemas/semantics (Gemini exact/flexible/regex/fuzzy, correction errors, approval modification flow, result feedback; DeepSeek observation/version guards; provider-guard stripping) must be reflected in `tests/` and, where user-visible, in `README.md`.
 
 ## Agent Workflow
 

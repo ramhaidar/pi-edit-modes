@@ -155,7 +155,7 @@ Replacement recovery follows this order:
 
 By default a replacement must resolve to one intended match. `allow_multiple=true` permits replacing all accepted matches. Existing file line endings are preserved; newly created files use the host OS line ending, matching Gemini CLI (`CRLF` on Windows, `LF` elsewhere).
 
-If `old_string` is empty and the target does not exist, `replace` creates the file from `new_string`, matching current Gemini CLI create semantics. If the file already exists, an empty `old_string` is rejected. If all normal matching strategies fail on an eligible non-JSON-family file and `gemini.disableLLMCorrection=false`, the extension performs a bounded utility-model correction pass using `instruction`, the failure, and the latest on-disk file content, then retries the replacement against that fresh content.
+If `old_string` is empty and the target does not exist, `replace` creates the file from `new_string`, matching current Gemini CLI create semantics. If the file already exists, an empty `old_string` is rejected. If all normal matching strategies fail on an eligible non-JSON-family file and `gemini.disableLLMCorrection=false`, the extension performs a bounded utility-model correction pass using `instruction`, the failure, and the latest on-disk file content, then retries the replacement against that fresh content. If that secondary correction judges that no edit is required, the call fails as an upstream-style edit error rather than succeeding as a no-op; the error includes the correction explanation and the original edit failure.
 
 ### `write_file`
 
@@ -173,12 +173,14 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 
 `gemini.approval` defaults to `ask_user`.
 
-- `ask_user`: the extension calculates the proposed mutation first, including recovery/correction, generates the diff, and shows it for approval. For `write_file`, the user may edit the complete proposed `content`; for `replace`, the editable confirmation value is the actual proposed `new_string`, matching Gemini CLI. The modified value is revalidated before commit. A non-interactive session fails closed because approval cannot be obtained.
+- `ask_user`: the extension calculates the proposed mutation first, including recovery/correction, generates the diff, and shows it for approval. For both tools the editor receives the whole proposed file content. For a user-modified `replace`, execution is converted to the current whole file as `old_string` and the user-modified whole proposal as `new_string`, matching Gemini CLI's current modify lifecycle. The modified content is revalidated before commit. A non-interactive session fails closed because approval cannot be obtained.
 - `auto_edit`: the same proposal/recovery pipeline still runs, including correction only when enabled, but the extension skips the interactive approval UI.
 
 The executor commits only the prepared proposal for that tool call and verifies that the on-disk preimage has not changed since proposal calculation, so an edit approved against stale content is rejected instead of silently clobbering external changes. Prepared proposals are keyed by Pi session ID plus workspace path plus tool-call ID and are cleared on session start/shutdown, preventing approval state from leaking across sessions.
 
-Successful `replace` and `write_file` results sent back to the model include a bounded updated-code context snippet. If confirmation changed `new_string` or `content`, the result also reports the exact value that was actually approved and written, so the model sees the final mutation without requiring an immediate read-back.
+Successful `replace` and `write_file` results sent back to the model include a bounded updated-code context snippet. If confirmation changed a proposal, the result also reports the exact final `new_string` or `content` that was approved and written; for a manually modified `replace`, that `new_string` is the whole user-modified proposed file, matching upstream. Fuzzy recovery also reports the 1-based matched line range(s), for example `Applied fuzzy match at line 12.` or `Applied fuzzy match at lines 12-14, 30-32.`
+
+Gemini CLI also appends newly discovered subdirectory project context after successful high-intent file operations. Pi loads its own project context files (`AGENTS.override.md`, `AGENTS.md`, or `CLAUDE.md`) through the host resource loader, but `ExtensionContext` does not expose Gemini CLI's memory-context manager or an equivalent trusted JIT subdirectory discovery service. `pi-edit-modes` therefore does not independently read extra context files after a mutation, because doing so would bypass Pi's resource/trust policy. This remains an explicit host-context lifecycle divergence.
 
 ## DeepSeek semantics
 
@@ -263,6 +265,6 @@ pnpm check
 
 `pnpm check` runs Prettier format checking, TypeScript typechecking, Oxlint with warnings denied across `src` and `tests`, and the full Node test suite. GitHub Actions runs the same gates after a frozen install on Node 22 and Node 24.
 
-Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini create/recovery/correction/approval behavior, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings; DeepSeek observation and stale-version semantics, session isolation, exclusive mutation scheduling, large-file streaming, image validation/normalization, `str_replace_editor`; Codex Environment ID grammar/execution rejection on a single-environment host; and diff rendering.
+Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini create/recovery/correction/approval behavior, secondary no-change error semantics, whole-proposed-file manual modification, fuzzy match line feedback, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings; DeepSeek observation and stale-version semantics, session isolation, exclusive mutation scheduling, large-file streaming, image validation/normalization, `str_replace_editor`; Codex Environment ID grammar/execution rejection on a single-environment host; and diff rendering.
 
 Two filesystem parity tests are skipped on platforms where the required POSIX mode/symlink behavior cannot be exercised by the current test environment.

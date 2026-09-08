@@ -129,6 +129,73 @@ test("Gemini replace retries failed matching through utility correction", async 
   }
 });
 
+test("Gemini correction noChangesRequired is returned as an upstream-style tool error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-no-change-"));
+  try {
+    const path = join(cwd, "file.txt");
+    await writeFile(path, "alpha beta gamma\n", "utf8");
+    const ctx = {
+      cwd,
+      model: { id: "gemini-3-pro" },
+      modelRegistry: {
+        complete: async () => ({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                noChangesRequired: true,
+                explanation: "The requested state already holds",
+              }),
+            },
+          ],
+        }),
+      },
+    };
+    const event = {
+      toolCallId: "no-change",
+      toolName: "replace",
+      input: {
+        file_path: "file.txt",
+        instruction: "Make the requested change",
+        old_string: "text that cannot match the file",
+        new_string: "replacement",
+      },
+    };
+    const blocked = await handleGeminiToolCall(event, ctx, "auto_edit", false);
+    assert.equal(blocked?.block, true);
+    assert.match(blocked?.reason ?? "", /secondary check by an LLM/i);
+    assert.match(blocked?.reason ?? "", /The requested state already holds/);
+    assert.match(blocked?.reason ?? "", /Could not find an exact match/);
+    assert.equal(await readFile(path, "utf8"), "alpha beta gamma\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Gemini fuzzy recovery reports the upstream line range to the model", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-fuzzy-feedback-"));
+  try {
+    const path = join(cwd, "file.txt");
+    await writeFile(path, "const message = helloWorle;\n", "utf8");
+    const result = await tool("replace").execute(
+      "fuzzy-feedback",
+      {
+        file_path: "file.txt",
+        instruction: "Update the message",
+        old_string: "const message = helloWorld;\n",
+        new_string: "const message = goodbyeWorld;\n",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd },
+    );
+    assert.equal(await readFile(path, "utf8"), "const message = goodbyeWorld;\n");
+    assert.match(firstText(result), /Applied fuzzy match at line 1\./);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("Gemini write approval returns actual user-modified content and diff context", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-approval-"));
   try {
@@ -176,7 +243,7 @@ test("Gemini write approval returns actual user-modified content and diff contex
   }
 });
 
-test("Gemini replace approval edits new_string rather than the whole proposed file", async () => {
+test("Gemini replace approval edits the whole proposed file like current Gemini CLI", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-replace-approval-"));
   try {
     const path = join(cwd, "file.txt");
@@ -192,7 +259,7 @@ test("Gemini replace approval edits new_string rather than the whole proposed fi
         editor: async (title: string, initial: string) => {
           editorTitle = title;
           editorInitial = initial;
-          return "user replacement";
+          return "before\nuser replacement\nafter\nuser-added tail\n";
         },
       },
     };
@@ -207,8 +274,8 @@ test("Gemini replace approval edits new_string rather than the whole proposed fi
       },
     };
     assert.equal(await handleGeminiToolCall(event, ctx, "ask_user"), undefined);
-    assert.match(editorTitle, /new_string/);
-    assert.equal(editorInitial, "proposed replacement");
+    assert.match(editorTitle, /replace content/);
+    assert.equal(editorInitial, "before\nproposed replacement\nafter\n");
     const result = await tool("replace").execute(
       event.toolCallId,
       event.input,
@@ -216,11 +283,14 @@ test("Gemini replace approval edits new_string rather than the whole proposed fi
       undefined,
       ctx,
     );
-    assert.equal(await readFile(path, "utf8"), "before\nuser replacement\nafter\n");
+    assert.equal(
+      await readFile(path, "utf8"),
+      "before\nuser replacement\nafter\nuser-added tail\n",
+    );
     const text = firstText(result);
-    assert.match(text, /modified the `new_string` content to be: user replacement/);
+    assert.match(text, /modified the `new_string` content to be:/);
+    assert.match(text, /user-added tail/);
     assert.match(text, /Here is the updated code:/);
-    assert.match(text, /user replacement/);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

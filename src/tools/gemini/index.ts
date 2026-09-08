@@ -124,23 +124,29 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
           else if (mutation.after !== mutation.before)
             await fs.writeFile(mutation.absolutePath, mutation.after, false, signal);
           const strategy =
-            mutation.strategy && mutation.strategy !== "exact"
+            mutation.strategy && mutation.strategy !== "exact" && mutation.strategy !== "fuzzy"
               ? ` using ${mutation.strategy} recovery`
               : "";
-          const correction = mutation.corrected ? " after edit correction" : "";
+          const fuzzyFeedback =
+            mutation.strategy === "fuzzy" && mutation.matchRanges?.length
+              ? `Applied fuzzy match at line${mutation.matchRanges.length > 1 ? "s" : ""} ${mutation.matchRanges
+                  .map((range) =>
+                    range.start === range.end ? `${range.start}` : `${range.start}-${range.end}`,
+                  )
+                  .join(", ")}.`
+              : undefined;
           const count = mutation.occurrences ?? 0;
           const successParts = [
             mutation.before === undefined
               ? `Successfully created and wrote to new file: ${mutation.absolutePath}.`
-              : count === 0
-                ? `No changes required for ${params.file_path}.${correction}`
-                : `Successfully modified file: ${mutation.absolutePath} (${count} replacements).`,
+              : `Successfully modified file: ${mutation.absolutePath} (${count} replacements).`,
           ];
           if (mutation.modifiedByUser) {
             successParts.push(
               `The confirmation step modified the \`new_string\` content to be: ${mutation.effectiveNewString ?? ""}.`,
             );
           }
+          if (fuzzyFeedback) successParts.push(fuzzyFeedback);
           if (mutation.before === undefined || mutation.after !== mutation.before) {
             successParts.push(
               `Here is the updated code:\n${getDiffContextSnippet(mutation.before ?? "", mutation.after, 5)}`,

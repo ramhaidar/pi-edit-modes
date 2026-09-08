@@ -91,6 +91,7 @@ test("fuzzy recovery handles a small textual mismatch", () => {
     new_string: "const message = goodbyeWorld;\n",
   });
   assert.equal(plan.strategy, "fuzzy");
+  assert.deepEqual(plan.matchRanges, [{ start: 1, end: 1 }]);
   assert.equal(plan.content, "const message = goodbyeWorld;\n");
 });
 

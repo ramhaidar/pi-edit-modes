@@ -23,6 +23,7 @@ export interface PreparedGeminiMutation {
   action: "A" | "M";
   occurrences?: number;
   strategy?: ReplacementStrategy;
+  matchRanges?: Array<{ start: number; end: number }>;
   corrected?: boolean;
   modifiedByUser?: boolean;
   effectiveOldString?: string;
@@ -38,6 +39,17 @@ export interface GeminiMutationScope {
 
 const prepared = new Map<string, PreparedGeminiMutation>();
 const JSON_FAMILY = new Set([".json", ".json5", ".jsonc", ".ipynb"]);
+
+export class GeminiEditNoChangeError extends Error {
+  readonly code = "EDIT_NO_CHANGE_LLM_JUDGEMENT";
+
+  constructor(explanation: string, originalError: Error) {
+    super(
+      `A secondary check by an LLM determined that no changes were necessary to fulfill the instruction. Explanation: ${explanation}. Original error with the parameters given: ${originalError.message}`,
+    );
+    this.name = "GeminiEditNoChangeError";
+  }
+}
 const targetPath = (cwd: string, path: string) =>
   isAbsolute(path) ? resolve(path) : resolve(cwd, path);
 
@@ -183,7 +195,14 @@ async function correctFailedReplace(
     `Instruction:\n${String(params.instruction ?? "")}\n\nFailed search:\n${String(params.old_string ?? "")}\n\nReplacement:\n${String(params.new_string ?? "")}\n\nError:\n${error.message}\n\nLatest file content:\n${latest}`,
     signal,
   );
-  if (result?.noChangesRequired === true) return { noChangesRequired: true as const };
+  if (result?.noChangesRequired === true)
+    return {
+      noChangesRequired: true as const,
+      explanation:
+        typeof result.explanation === "string" && result.explanation.trim().length > 0
+          ? result.explanation.trim()
+          : "No explanation was provided by the correction model",
+    };
   if (
     typeof result?.search !== "string" ||
     typeof result?.replace !== "string" ||
@@ -279,6 +298,7 @@ export async function calculateGeminiMutation(
         action: "M",
         occurrences: plan.occurrences,
         strategy: plan.strategy,
+        matchRanges: plan.matchRanges,
         effectiveOldString: plan.finalOldString,
         effectiveNewString: plan.finalNewString,
         allowMultiple: params.allow_multiple === true,
@@ -290,21 +310,7 @@ export async function calculateGeminiMutation(
       if (latest === undefined) throw error;
       const fixed = await correctFailedReplace(ctx, params, error, latest, signal);
       if (!fixed) throw error;
-      if (fixed.noChangesRequired)
-        return {
-          toolCallId,
-          toolName,
-          filePath,
-          absolutePath,
-          before: latest,
-          after: latest,
-          action: "M",
-          occurrences: 0,
-          corrected: true,
-          effectiveOldString: oldString,
-          effectiveNewString: newString,
-          allowMultiple: params.allow_multiple === true,
-        };
+      if (fixed.noChangesRequired) throw new GeminiEditNoChangeError(fixed.explanation, error);
       const retry = planSingleReplacement(latest, {
         file_path: filePath,
         instruction: String(params.instruction ?? ""),
@@ -322,6 +328,7 @@ export async function calculateGeminiMutation(
         action: "M",
         occurrences: retry.occurrences,
         strategy: retry.strategy,
+        matchRanges: retry.matchRanges,
         corrected: true,
         effectiveOldString: retry.finalOldString,
         effectiveNewString: retry.finalNewString,
@@ -377,34 +384,24 @@ export function modifyGeminiMutation(
     };
   }
 
-  if (mutation.before === undefined) {
-    return {
-      ...mutation,
-      after: normalizeNewFileLineEndings(editedContent),
-      effectiveNewString: editedContent,
-      modifiedByUser: true,
-    };
-  }
-
-  const oldString = mutation.effectiveOldString;
-  if (oldString === undefined)
-    throw new Error("replace proposal is missing its effective old_string");
+  const oldContent = mutation.before ?? "";
   validateGeminiOmissionPlaceholders("replace", {
-    old_string: oldString,
+    old_string: oldContent,
     new_string: editedContent,
   });
-  const replanned = planSingleReplacement(mutation.before, {
-    file_path: mutation.filePath,
-    old_string: oldString,
-    new_string: editedContent,
-    allow_multiple: mutation.allowMultiple === true,
-  });
+  const after =
+    mutation.before === undefined
+      ? normalizeNewFileLineEndings(editedContent)
+      : preserveReplacementLineEndings(editedContent, mutation.before);
   return {
     ...mutation,
-    after: replanned.content,
-    occurrences: replanned.occurrences,
-    strategy: replanned.strategy,
+    after,
+    occurrences: 1,
+    strategy: "exact",
+    matchRanges: undefined,
+    effectiveOldString: oldContent,
     effectiveNewString: editedContent,
+    allowMultiple: false,
     modifiedByUser: true,
   };
 }
@@ -417,14 +414,22 @@ export async function handleGeminiToolCall(
 ): Promise<{ block: true; reason: string } | undefined> {
   if (event?.toolName !== "replace" && event?.toolName !== "write_file") return;
   if (!event.input || typeof event.input !== "object") return;
-  const mutation = await calculateGeminiMutation(
-    event.toolCallId,
-    event.toolName,
-    event.input,
-    ctx,
-    ctx.signal,
-    { disableLLMCorrection },
-  );
+  let mutation: PreparedGeminiMutation;
+  try {
+    mutation = await calculateGeminiMutation(
+      event.toolCallId,
+      event.toolName,
+      event.input,
+      ctx,
+      ctx.signal,
+      { disableLLMCorrection },
+    );
+  } catch (error) {
+    if (error instanceof GeminiEditNoChangeError) {
+      return { block: true, reason: error.message };
+    }
+    throw error;
+  }
   if (approval === "auto_edit") {
     rememberGeminiMutation(mutation, ctx);
     return;
@@ -454,12 +459,10 @@ export async function handleGeminiToolCall(
     return { block: true, reason: `User rejected Gemini ${event.toolName} for ${path}.` };
   if (action === "Edit proposed content") {
     const editableContent =
-      event.toolName === "replace"
-        ? (mutation.effectiveNewString ?? String(event.input.new_string ?? ""))
-        : (mutation.effectiveContent ?? mutation.after);
+      event.toolName === "replace" ? mutation.after : (mutation.effectiveContent ?? mutation.after);
     const edited = await ctx.ui.editor(
       event.toolName === "replace"
-        ? `Edit proposed new_string: ${path}`
+        ? `Edit proposed replace content: ${path}`
         : `Edit proposed write_file content: ${path}`,
       editableContent,
     );
