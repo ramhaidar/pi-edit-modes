@@ -15,7 +15,7 @@ const DEFAULT_MODES: EditModesSettings["defaultMode"][] = ["pi", "gemini", "code
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
 const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
-const SAVE_ROW = 10;
+const SAVE_ROW = 11;
 
 function cycle<T>(values: readonly T[], current: T, direction: -1 | 1): T {
   const index = Math.max(0, values.indexOf(current));
@@ -23,7 +23,11 @@ function cycle<T>(values: readonly T[], current: T, direction: -1 | 1): T {
 }
 
 function cloneDraft(draft: SettingsDialogDraft): SettingsDialogDraft {
-  return { sessionMode: draft.sessionMode, sessionSurface: draft.sessionSurface, settings: structuredClone(draft.settings) };
+  return {
+    sessionMode: draft.sessionMode,
+    sessionSurface: draft.sessionSurface,
+    settings: structuredClone(draft.settings),
+  };
 }
 
 export class SettingsDialog {
@@ -67,10 +71,20 @@ export class SettingsDialog {
       { label: "Default mode", value: this.draft.settings.defaultMode },
       { label: "Default surface", value: this.draft.settings.surface },
       { label: "Auto discovery", value: this.draft.settings.autoDiscovery.enabled ? "On" : "Off" },
-      { label: "Auto detect Gemini", value: this.draft.settings.autoDiscovery.gemini ? "On" : "Off" },
+      {
+        label: "Auto detect Gemini",
+        value: this.draft.settings.autoDiscovery.gemini ? "On" : "Off",
+      },
       { label: "Auto detect Codex", value: this.draft.settings.autoDiscovery.codex ? "On" : "Off" },
-      { label: "Auto detect DeepSeek", value: this.draft.settings.autoDiscovery.deepseek ? "On" : "Off" },
+      {
+        label: "Auto detect DeepSeek",
+        value: this.draft.settings.autoDiscovery.deepseek ? "On" : "Off",
+      },
       { label: "Gemini mutation approval", value: this.draft.settings.gemini.approval },
+      {
+        label: "Gemini LLM correction",
+        value: this.draft.settings.gemini.disableLLMCorrection ? "Off" : "On",
+      },
       { label: "DeepSeek preset", value: this.draft.settings.deepseek.preset },
       { label: "Save settings", value: "" },
     ];
@@ -78,23 +92,62 @@ export class SettingsDialog {
 
   private change(direction: -1 | 1): void {
     switch (this.selected) {
-      case 0: this.draft.sessionMode = cycle(SESSION_MODES, this.draft.sessionMode, direction); break;
-      case 1: this.draft.sessionSurface = cycle(SESSION_SURFACES, this.draft.sessionSurface, direction); break;
-      case 2: this.draft.settings.defaultMode = cycle(DEFAULT_MODES, this.draft.settings.defaultMode, direction); break;
-      case 3: this.draft.settings.surface = cycle(TOOL_SURFACES, this.draft.settings.surface, direction); break;
-      case 4: this.draft.settings.autoDiscovery.enabled = !this.draft.settings.autoDiscovery.enabled; break;
-      case 5: this.draft.settings.autoDiscovery.gemini = !this.draft.settings.autoDiscovery.gemini; break;
-      case 6: this.draft.settings.autoDiscovery.codex = !this.draft.settings.autoDiscovery.codex; break;
-      case 7: this.draft.settings.autoDiscovery.deepseek = !this.draft.settings.autoDiscovery.deepseek; break;
-      case 8: this.draft.settings.gemini.approval = cycle(GEMINI_APPROVALS, this.draft.settings.gemini.approval, direction); break;
-      case 9: this.draft.settings.deepseek.preset = cycle(DEEPSEEK_PRESETS, this.draft.settings.deepseek.preset, direction); break;
-      case SAVE_ROW: this.done({ action: "save", draft: cloneDraft(this.draft) }); return;
+      case 0:
+        this.draft.sessionMode = cycle(SESSION_MODES, this.draft.sessionMode, direction);
+        break;
+      case 1:
+        this.draft.sessionSurface = cycle(SESSION_SURFACES, this.draft.sessionSurface, direction);
+        break;
+      case 2:
+        this.draft.settings.defaultMode = cycle(
+          DEFAULT_MODES,
+          this.draft.settings.defaultMode,
+          direction,
+        );
+        break;
+      case 3:
+        this.draft.settings.surface = cycle(TOOL_SURFACES, this.draft.settings.surface, direction);
+        break;
+      case 4:
+        this.draft.settings.autoDiscovery.enabled = !this.draft.settings.autoDiscovery.enabled;
+        break;
+      case 5:
+        this.draft.settings.autoDiscovery.gemini = !this.draft.settings.autoDiscovery.gemini;
+        break;
+      case 6:
+        this.draft.settings.autoDiscovery.codex = !this.draft.settings.autoDiscovery.codex;
+        break;
+      case 7:
+        this.draft.settings.autoDiscovery.deepseek = !this.draft.settings.autoDiscovery.deepseek;
+        break;
+      case 8:
+        this.draft.settings.gemini.approval = cycle(
+          GEMINI_APPROVALS,
+          this.draft.settings.gemini.approval,
+          direction,
+        );
+        break;
+      case 9:
+        this.draft.settings.gemini.disableLLMCorrection =
+          !this.draft.settings.gemini.disableLLMCorrection;
+        break;
+      case 10:
+        this.draft.settings.deepseek.preset = cycle(
+          DEEPSEEK_PRESETS,
+          this.draft.settings.deepseek.preset,
+          direction,
+        );
+        break;
+      case SAVE_ROW:
+        this.done({ action: "save", draft: cloneDraft(this.draft) });
+        return;
     }
     this.requestRender();
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return this.done({ action: "cancel" });
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c"))
+      return this.done({ action: "cancel" });
     if (matchesKey(data, "up")) {
       this.selected = (this.selected - 1 + this.rows().length) % this.rows().length;
       return this.requestRender();
@@ -106,7 +159,8 @@ export class SettingsDialog {
     if (matchesKey(data, "left")) return this.change(-1);
     if (matchesKey(data, "right") || matchesKey(data, "space")) return this.change(1);
     if (matchesKey(data, "return")) {
-      if (this.selected === SAVE_ROW) return this.done({ action: "save", draft: cloneDraft(this.draft) });
+      if (this.selected === SAVE_ROW)
+        return this.done({ action: "save", draft: cloneDraft(this.draft) });
       return this.change(1);
     }
   }
@@ -118,8 +172,17 @@ export class SettingsDialog {
     const title = " File Tool Mode ";
     const left = Math.max(0, Math.floor((inner - visibleWidth(title)) / 2));
     const right = Math.max(0, inner - left - visibleWidth(title));
-    lines.push(this.theme.fg("border", `╭${"─".repeat(left)}`) + this.theme.fg("accent", title) + this.theme.fg("border", `${"─".repeat(right)}╮`));
-    const add = (text = "") => lines.push(this.theme.fg("border", "│") + truncateToWidth(` ${text}`, inner, "...", true).padEnd(inner) + this.theme.fg("border", "│"));
+    lines.push(
+      this.theme.fg("border", `╭${"─".repeat(left)}`) +
+        this.theme.fg("accent", title) +
+        this.theme.fg("border", `${"─".repeat(right)}╮`),
+    );
+    const add = (text = "") =>
+      lines.push(
+        this.theme.fg("border", "│") +
+          truncateToWidth(` ${text}`, inner, "...", true).padEnd(inner) +
+          this.theme.fg("border", "│"),
+      );
     add(`Model: ${this.modelLabel}`);
     add(`Resolved mode: ${this.resolvedMode}`);
     add(`Effective surface: ${this.effectiveSurface}`);

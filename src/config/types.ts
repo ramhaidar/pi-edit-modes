@@ -19,6 +19,7 @@ export interface EditModesSettings {
   };
   gemini: {
     approval: GeminiApprovalMode;
+    disableLLMCorrection: boolean;
   };
   deepseek: {
     preset: DeepSeekPreset;
@@ -31,7 +32,8 @@ export interface ModelIdentity {
   name?: string;
 }
 
-export type ResolutionSource = "session" | "models.json" | "auto-gemini" | "auto-codex" | "auto-deepseek" | "default";
+export type ResolutionSource =
+  "session" | "models.json" | "auto-gemini" | "auto-codex" | "auto-deepseek" | "default";
 
 export interface ModeResolution {
   mode: ToolMode;
