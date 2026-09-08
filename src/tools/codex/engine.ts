@@ -248,10 +248,6 @@ type PatchRenderOperation = {
 	removedLines?: number;
 };
 
-type PatchRenderState = {
-	callComponent?: PatchCallRenderComponent;
-};
-
 type PatchRendererContext = {
 	toolCallId: string;
 	invalidate: () => void;
@@ -1377,6 +1373,9 @@ function resolveSecurePathRouteForAccess(
 	absolutePath: string,
 ): SecurePathRoute {
 	if (isSecureFilesystemContext(access)) return resolveSecurePathRoute(access, absolutePath);
+	if (isPortableFilesystemContext(access)) {
+		throw new Error("Portable filesystem context reached descriptor-only secure path routing");
+	}
 	return {
 		anchor: access,
 		components: absoluteComponents(absolutePath),
@@ -2773,10 +2772,6 @@ function computeDesiredToolTransition(input: {
 	return { nextTools, nextOwnership };
 }
 
-function sameToolList(left: string[], right: string[]): boolean {
-	return left.length === right.length && left.every((name, index) => name === right[index]);
-}
-
 function effectiveFileToolSurface(activeTools: string[]): string {
 	const names = ["edit", "write", "apply_patch"].filter((name) => activeTools.includes(name));
 	return names.length === 0 ? "(none)" : names.join(", ");
@@ -2826,10 +2821,15 @@ export function registerCodexApplyPatchTool(pi: ExtensionAPI): void {
 				throw new Error(`apply_patch verification failed: ${message}`);
 			}
 
-			// Pi currently exposes a single workspace per tool invocation. Accept the
-			// upstream environment_id grammar for protocol parity and resolve it to the
-			// current invocation environment. Multi-environment selection can be wired
-			// here if/when the host exposes an environment catalog.
+			// Pi currently exposes a single workspace per tool invocation and no
+			// environment catalog. Keep the upstream grammar model-facing, but preserve
+			// single-environment execution semantics: an explicit selector cannot be
+			// honored and therefore must fail rather than silently targeting cwd.
+			if (parsed.environmentId !== undefined) {
+				throw new Error(
+					`apply_patch environment selection is unavailable in this single-environment Pi invocation (requested '${parsed.environmentId}')`,
+				);
+			}
 
 			// Semantic path resolution must preserve the turn cwd spelling. Do not realpath() it.
 			const semanticCwd = resolve(ctx.cwd);
