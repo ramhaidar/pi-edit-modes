@@ -1,88 +1,74 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planReplacementChunks, planSingleReplacement, preserveReplacementLineEndings } from "../src/tools/gemini/replacement-engine.ts";
+import { planSingleReplacement, preserveReplacementLineEndings } from "../src/tools/gemini/replacement-engine.ts";
+import { registerGeminiTools } from "../src/tools/gemini/index.ts";
+
+test("Gemini replace uses exact current CLI parameter vocabulary", () => {
+  const tools: any[] = [];
+  registerGeminiTools({ registerTool: (tool: any) => tools.push(tool) } as any);
+  assert.deepEqual(tools.map((tool) => tool.name), ["replace", "write_file"]);
+  assert.deepEqual(Object.keys(tools[0].parameters.properties), ["file_path", "instruction", "old_string", "new_string", "allow_multiple"]);
+  assert.deepEqual(tools[0].parameters.required, ["file_path", "instruction", "old_string", "new_string"]);
+  assert.deepEqual(Object.keys(tools[1].parameters.properties), ["file_path", "content"]);
+  assert.deepEqual(tools[1].parameters.required, ["file_path", "content"]);
+});
 
 test("single unique exact match", () => {
-  const p = planSingleReplacement("a\nb\nc\n", { TargetContent: "b", ReplacementContent: "B" }, { strictExactMatch: true });
-  assert.equal(p.content, "a\nB\nc\n");
-  assert.equal(p.replacements.length, 1);
+  const plan = planSingleReplacement("a\nb\nc\n", {
+    file_path: "x.txt",
+    instruction: "uppercase b",
+    old_string: "b",
+    new_string: "B",
+  });
+  assert.equal(plan.content, "a\nB\nc\n");
+  assert.equal(plan.occurrences, 1);
+  assert.equal(plan.strategy, "exact");
 });
 
 test("missing target fails", () => {
-  assert.throws(() => planSingleReplacement("abc", { TargetContent: "x", ReplacementContent: "y" }, { strictExactMatch: true }), /not found/);
+  assert.throws(() => planSingleReplacement("abc", {
+    old_string: "x",
+    new_string: "y",
+  }), /Could not find/);
 });
 
-test("duplicate target fails unless AllowMultiple", () => {
-  assert.throws(() => planSingleReplacement("x x", { TargetContent: "x", ReplacementContent: "y" }, { strictExactMatch: true }), /matched 2/);
-  const p = planSingleReplacement("x x", { TargetContent: "x", ReplacementContent: "y", AllowMultiple: true }, { strictExactMatch: true });
-  assert.equal(p.content, "y y");
+test("duplicate target requires allow_multiple", () => {
+  assert.throws(() => planSingleReplacement("x x", { old_string: "x", new_string: "y" }), /expected 1 occurrence but found 2/i);
+  const plan = planSingleReplacement("x x", { old_string: "x", new_string: "y", allow_multiple: true });
+  assert.equal(plan.content, "y y");
+  assert.equal(plan.occurrences, 2);
 });
 
-test("line range is authoritative", () => {
-  const original = "same\nother\nsame\n";
-  const p = planSingleReplacement(original, { TargetContent: "same", ReplacementContent: "hit", StartLine: 3, EndLine: 3 }, { strictExactMatch: true });
-  assert.equal(p.content, "same\nother\nhit\n");
-  assert.throws(() => planSingleReplacement(original, { TargetContent: "other", ReplacementContent: "x", StartLine: 3, EndLine: 3 }, { strictExactMatch: true }), /not found/);
+test("flexible recovery mirrors Gemini indentation/whitespace strategy", () => {
+  const plan = planSingleReplacement("function x() {\n  return 1;\n}\n", {
+    old_string: "function x() {\nreturn 1;\n}",
+    new_string: "function x() {\nreturn 2;\n}",
+  });
+  assert.equal(plan.strategy, "flexible");
+  assert.equal(plan.content, "function x() {\nreturn 2;\n}\n");
 });
 
-test("empty replacement deletes target", () => {
-  const p = planSingleReplacement("abc", { TargetContent: "b", ReplacementContent: "" }, { strictExactMatch: true });
-  assert.equal(p.content, "ac");
+test("regex recovery tolerates token whitespace differences", () => {
+  const plan = planSingleReplacement("const   value=foo ( bar ) ;\n", {
+    old_string: "const value = foo(bar);",
+    new_string: "const value = baz(bar);",
+  });
+  assert.equal(plan.strategy, "regex");
+  assert.equal(plan.content, "const value = baz(bar);\n");
 });
 
-test("multi replacement validates against same original and applies descending offsets", () => {
-  const p = planReplacementChunks("alpha beta gamma", [
-    { TargetContent: "alpha", ReplacementContent: "A" },
-    { TargetContent: "gamma", ReplacementContent: "GAMMA-LONG" },
-  ], { strictExactMatch: true });
-  assert.equal(p.content, "A beta GAMMA-LONG");
+test("fuzzy recovery handles a small textual mismatch", () => {
+  const plan = planSingleReplacement("const message = helloWorle;\n", {
+    old_string: "const message = helloWorld;\n",
+    new_string: "const message = goodbyeWorld;\n",
+  });
+  assert.equal(plan.strategy, "fuzzy");
+  assert.equal(plan.content, "const message = goodbyeWorld;\n");
 });
 
-test("overlapping chunks are rejected", () => {
-  assert.throws(() => planReplacementChunks("abcdef", [
-    { TargetContent: "abc", ReplacementContent: "x" },
-    { TargetContent: "bc", ReplacementContent: "y" },
-  ], { strictExactMatch: true }), /overlap/);
-});
-
-test("one invalid multi chunk aborts planning", () => {
-  assert.throws(() => planReplacementChunks("abc def", [
-    { TargetContent: "abc", ReplacementContent: "A" },
-    { TargetContent: "missing", ReplacementContent: "M" },
-  ], { strictExactMatch: true }), /chunk 2/);
-});
-
-test("multiple edits on same line work when non-overlapping", () => {
-  const p = planReplacementChunks("one two three", [
-    { TargetContent: "one", ReplacementContent: "1" },
-    { TargetContent: "three", ReplacementContent: "3" },
-  ], { strictExactMatch: true });
-  assert.equal(p.content, "1 two 3");
-});
-
-test("replacement content preserves CRLF", () => {
+test("Gemini line-ending normalization preserves existing CRLF", () => {
   const original = "a\r\nb\r\nc\r\n";
-  const p = planSingleReplacement(original, { TargetContent: "b", ReplacementContent: "B\nBB" }, { strictExactMatch: true });
-  assert.equal(p.content, "a\r\nB\r\nBB\r\nc\r\n");
+  const plan = planSingleReplacement(original, { old_string: "a\nb", new_string: "A\nB" });
+  assert.equal(plan.content, "A\r\nB\r\nc\r\n");
   assert.equal(preserveReplacementLineEndings("x\ny", original), "x\r\ny");
-});
-
-test("strict exact mode does not silently normalize CRLF target", () => {
-  assert.throws(() => planSingleReplacement("a\r\nb", { TargetContent: "a\nb", ReplacementContent: "x" }, { strictExactMatch: true }), /not found/);
-});
-
-test("non-strict option only relaxes line-ending representation", () => {
-  const p = planSingleReplacement("a\r\nb", { TargetContent: "a\nb", ReplacementContent: "x" }, { strictExactMatch: false });
-  assert.equal(p.content, "x");
-});
-
-test("bare CR files support StartLine and EndLine ranges", () => {
-  const original = "a\rb\rc";
-  const p = planSingleReplacement(original, {
-    TargetContent: "b",
-    ReplacementContent: "B",
-    StartLine: 2,
-    EndLine: 2,
-  }, { strictExactMatch: true });
-  assert.equal(p.content, "a\rB\rc");
 });

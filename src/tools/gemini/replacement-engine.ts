@@ -1,155 +1,252 @@
-export interface ReplacementChunk {
-  TargetContent: string;
-  ReplacementContent: string;
-  AllowMultiple?: boolean;
-  StartLine?: number;
-  EndLine?: number;
+export interface GeminiReplaceParams {
+  file_path?: string;
+  instruction?: string;
+  old_string: string;
+  new_string: string;
+  allow_multiple?: boolean;
 }
 
-export interface PlannedReplacement {
-  start: number;
-  end: number;
-  replacement: string;
-  chunkIndex: number;
-}
+export type ReplacementStrategy = "exact" | "flexible" | "regex" | "fuzzy";
 
 export interface ReplacementPlan {
   content: string;
-  replacements: PlannedReplacement[];
+  occurrences: number;
+  strategy: ReplacementStrategy;
+  finalOldString: string;
+  finalNewString: string;
+  matchRanges?: Array<{ start: number; end: number }>;
 }
 
-function lineRangeOffsets(content: string, startLine?: number, endLine?: number): { start: number; end: number } {
-  const starts = [0];
-  for (let i = 0; i < content.length; i++) {
-    const code = content.charCodeAt(i);
-    if (code === 13) {
-      if (content.charCodeAt(i + 1) === 10) i += 1;
-      starts.push(i + 1);
-    } else if (code === 10) {
-      starts.push(i + 1);
-    }
-  }
-  const lineCount = starts.length;
-  const start = startLine ?? 1;
-  const end = endLine ?? lineCount;
-  if (!Number.isSafeInteger(start) || start < 1) throw new Error("StartLine must be a positive integer");
-  if (!Number.isSafeInteger(end) || end < 1) throw new Error("EndLine must be a positive integer");
-  if (start > end) throw new Error("StartLine must be <= EndLine");
-  if (start > lineCount) throw new Error(`StartLine ${start} exceeds file line count ${lineCount}`);
-  if (end > lineCount) throw new Error(`EndLine ${end} exceeds file line count ${lineCount}`);
-  return { start: starts[start - 1]!, end: end < lineCount ? starts[end]! : content.length };
+const FUZZY_MATCH_THRESHOLD = 0.1;
+const WHITESPACE_PENALTY_FACTOR = 0.1;
+const FUZZY_COMPLEXITY_LIMIT = 400_000_000;
+
+function normalizeLf(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function preferredLineEnding(content: string): "\r\n" | "\n" | "\r" {
-  const crlf = content.indexOf("\r\n");
-  const lf = content.indexOf("\n");
-  const cr = content.indexOf("\r");
-  if (crlf !== -1 && (lf === crlf || crlf < lf) && (cr === crlf || crlf < cr)) return "\r\n";
-  if (lf !== -1 && (cr === -1 || lf < cr)) return "\n";
-  if (cr !== -1) return "\r";
-  return "\n";
+function detectLineEnding(value: string): "\r\n" | "\n" | "\r" {
+  const match = value.match(/\r\n|\r|\n/);
+  return (match?.[0] as "\r\n" | "\n" | "\r" | undefined) ?? "\n";
 }
 
 export function preserveReplacementLineEndings(replacement: string, original: string): string {
-  const ending = preferredLineEnding(original);
-  return replacement.replace(/\r\n|\r|\n/g, ending);
+  const ending = detectLineEnding(original);
+  return normalizeLf(replacement).replace(/\n/g, ending);
 }
 
-function allExactMatches(haystack: string, needle: string, baseOffset: number): Array<{ start: number; end: number }> {
-  const matches: Array<{ start: number; end: number }> = [];
+function restoreOriginalLineEndings(original: string, normalized: string): string {
+  return normalized.replace(/\n/g, detectLineEnding(original));
+}
+
+function restoreTrailingNewline(original: string, modified: string): string {
+  const hadTrailing = /(?:\r\n|\r|\n)$/.test(original);
+  const hasTrailing = /(?:\r\n|\r|\n)$/.test(modified);
+  if (hadTrailing && !hasTrailing) return modified + detectLineEnding(original);
+  if (!hadTrailing && hasTrailing) return modified.replace(/(?:\r\n|\r|\n)$/, "");
+  return modified;
+}
+
+function occurrenceCount(haystack: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
   let cursor = 0;
   while (cursor <= haystack.length - needle.length) {
     const found = haystack.indexOf(needle, cursor);
-    if (found === -1) break;
-    matches.push({ start: baseOffset + found, end: baseOffset + found + needle.length });
+    if (found < 0) break;
+    count += 1;
     cursor = found + Math.max(1, needle.length);
   }
-  return matches;
+  return count;
 }
 
-function allLineEndingInsensitiveMatches(haystack: string, needle: string, baseOffset: number): Array<{ start: number; end: number }> {
-  // Non-strict mode is deliberately narrow: only CRLF/CR/LF representation may differ.
-  const normalizeWithMap = (text: string) => {
-    let normalized = "";
-    const starts: number[] = [];
-    const ends: number[] = [];
-    for (let i = 0; i < text.length;) {
-      starts.push(i);
-      if (text[i] === "\r" && text[i + 1] === "\n") {
-        normalized += "\n";
-        i += 2;
-        ends.push(i);
-      } else if (text[i] === "\r") {
-        normalized += "\n";
-        i += 1;
-        ends.push(i);
-      } else {
-        normalized += text[i]!;
-        i += 1;
-        ends.push(i);
-      }
-    }
-    return { normalized, starts, ends };
-  };
-  const h = normalizeWithMap(haystack);
-  const n = normalizeWithMap(needle).normalized;
-  if (n.length === 0) return [];
-  const normalizedMatches = allExactMatches(h.normalized, n, 0);
-  return normalizedMatches.map((match) => ({
-    start: baseOffset + (h.starts[match.start] ?? haystack.length),
-    end: baseOffset + (h.ends[match.end - 1] ?? haystack.length),
-  }));
+function literalReplaceAll(haystack: string, needle: string, replacement: string): string {
+  return haystack.split(needle).join(replacement);
 }
 
-export function planReplacementChunks(
-  original: string,
-  chunks: readonly ReplacementChunk[],
-  options: { strictExactMatch: boolean },
-): ReplacementPlan {
-  if (chunks.length === 0) throw new Error("ReplacementChunks must contain at least one chunk");
-  const planned: PlannedReplacement[] = [];
-
-  chunks.forEach((chunk, chunkIndex) => {
-    if (typeof chunk.TargetContent !== "string" || chunk.TargetContent.length === 0) {
-      throw new Error(`Replacement chunk ${chunkIndex + 1}: TargetContent must be a non-empty string`);
-    }
-    if (typeof chunk.ReplacementContent !== "string") {
-      throw new Error(`Replacement chunk ${chunkIndex + 1}: ReplacementContent must be a string`);
-    }
-    const scope = lineRangeOffsets(original, chunk.StartLine, chunk.EndLine);
-    const candidate = original.slice(scope.start, scope.end);
-    const matches = options.strictExactMatch
-      ? allExactMatches(candidate, chunk.TargetContent, scope.start)
-      : allLineEndingInsensitiveMatches(candidate, chunk.TargetContent, scope.start);
-    if (matches.length === 0) throw new Error(`Replacement chunk ${chunkIndex + 1}: TargetContent was not found in the requested range`);
-    if (matches.length > 1 && chunk.AllowMultiple !== true) {
-      throw new Error(`Replacement chunk ${chunkIndex + 1}: TargetContent matched ${matches.length} locations; set AllowMultiple=true to replace all`);
-    }
-    const selected = chunk.AllowMultiple === true ? matches : [matches[0]!];
-    const replacement = preserveReplacementLineEndings(chunk.ReplacementContent, original);
-    for (const match of selected) planned.push({ ...match, replacement, chunkIndex });
+function applyIndentation(lines: string[], targetIndentation: string): string[] {
+  if (lines.length === 0) return [];
+  const referenceIndent = lines[0]?.match(/^([ \t]*)/)?.[1] ?? "";
+  return lines.map((line) => {
+    if (line.trim() === "") return "";
+    if (line.startsWith(referenceIndent)) return targetIndentation + line.slice(referenceIndent.length);
+    return targetIndentation + line.trimStart();
   });
-
-  planned.sort((a, b) => a.start - b.start || a.end - b.end);
-  for (let i = 1; i < planned.length; i++) {
-    const previous = planned[i - 1]!;
-    const current = planned[i]!;
-    if (current.start < previous.end) {
-      throw new Error(`Replacement chunks ${previous.chunkIndex + 1} and ${current.chunkIndex + 1} overlap`);
-    }
-  }
-
-  let content = original;
-  for (const replacement of [...planned].sort((a, b) => b.start - a.start || b.end - a.end)) {
-    content = content.slice(0, replacement.start) + replacement.replacement + content.slice(replacement.end);
-  }
-  return { content, replacements: planned };
 }
 
-export function planSingleReplacement(
-  original: string,
-  chunk: ReplacementChunk,
-  options: { strictExactMatch: boolean },
-): ReplacementPlan {
-  return planReplacementChunks(original, [chunk], options);
+function sourceLinesWithEndings(content: string): string[] {
+  if (content.length === 0) return [];
+  return content.match(/.*(?:\n|$)/g)?.slice(0, -1) ?? [];
+}
+
+function exactReplacement(original: string, params: GeminiReplaceParams): ReplacementPlan | undefined {
+  const normalized = normalizeLf(original);
+  const oldString = normalizeLf(params.old_string);
+  const newString = normalizeLf(params.new_string);
+  const occurrences = occurrenceCount(normalized, oldString);
+  if (occurrences === 0) return undefined;
+  const next = literalReplaceAll(normalized, oldString, newString);
+  return {
+    content: restoreTrailingNewline(original, restoreOriginalLineEndings(original, next)),
+    occurrences,
+    strategy: "exact",
+    finalOldString: oldString,
+    finalNewString: newString,
+  };
+}
+
+function flexibleReplacement(original: string, params: GeminiReplaceParams): ReplacementPlan | undefined {
+  const normalized = normalizeLf(original);
+  const oldString = normalizeLf(params.old_string);
+  const newString = normalizeLf(params.new_string);
+  const sourceLines = sourceLinesWithEndings(normalized);
+  const searchLines = oldString.split("\n").map((line) => line.trim());
+  const replacementLines = newString.split("\n");
+  if (searchLines.length === 0) return undefined;
+
+  let occurrences = 0;
+  let i = 0;
+  while (i <= sourceLines.length - searchLines.length) {
+    const window = sourceLines.slice(i, i + searchLines.length);
+    const matches = window.every((line, index) => line.trim() === searchLines[index]);
+    if (matches) {
+      occurrences += 1;
+      const indentation = window[0]?.match(/^([ \t]*)/)?.[1] ?? "";
+      let replacement = applyIndentation(replacementLines, indentation).join("\n");
+      if (params.new_string !== "" && window.at(-1)?.endsWith("\n") && !replacement.endsWith("\n")) replacement += "\n";
+      sourceLines.splice(i, searchLines.length, replacement);
+    }
+    i += 1;
+  }
+
+  if (occurrences === 0) return undefined;
+  const next = sourceLines.join("");
+  return {
+    content: restoreTrailingNewline(original, restoreOriginalLineEndings(original, next)),
+    occurrences,
+    strategy: "flexible",
+    finalOldString: oldString,
+    finalNewString: newString,
+  };
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function regexReplacement(original: string, params: GeminiReplaceParams): ReplacementPlan | undefined {
+  const oldString = normalizeLf(params.old_string);
+  const newString = normalizeLf(params.new_string);
+  const delimiters = ["(", ")", ":", "[", "]", "{", "}", ">", "<", "="];
+  let processed = oldString;
+  for (const delimiter of delimiters) processed = processed.split(delimiter).join(` ${delimiter} `);
+  const tokens = processed.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return undefined;
+  const pattern = tokens.map(escapeRegex).join("\\s*");
+  const finalPattern = `^([ \\t]*)${pattern}`;
+  const normalized = normalizeLf(original);
+  const allMatches = normalized.match(new RegExp(finalPattern, "gm"));
+  if (!allMatches) return undefined;
+
+  const replacementLines = newString.split("\n");
+  const flags = params.allow_multiple ? "gm" : "m";
+  const next = normalized.replace(new RegExp(finalPattern, flags), (_match, indentation: string) =>
+    applyIndentation(replacementLines, indentation ?? "").join("\n"));
+  return {
+    content: restoreTrailingNewline(original, restoreOriginalLineEndings(original, next)),
+    occurrences: allMatches.length,
+    strategy: "regex",
+    finalOldString: oldString,
+    finalNewString: newString,
+  };
+}
+
+function stripWhitespace(value: string): string {
+  return value.replace(/\s/g, "");
+}
+
+function levenshtein(left: string, right: string): number {
+  if (left === right) return 0;
+  if (left.length === 0) return right.length;
+  if (right.length === 0) return left.length;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = new Array<number>(right.length + 1);
+    current[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      current[j] = Math.min(
+        current[j - 1]! + 1,
+        previous[j]! + 1,
+        previous[j - 1]! + (left[i - 1] === right[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length]!;
+}
+
+function fuzzyReplacement(original: string, params: GeminiReplaceParams): ReplacementPlan | undefined {
+  if (params.old_string.length < 10) return undefined;
+  const normalized = normalizeLf(original);
+  const oldString = normalizeLf(params.old_string);
+  const newString = normalizeLf(params.new_string);
+  const sourceLines = sourceLinesWithEndings(normalized);
+  if (sourceLines.length * Math.pow(params.old_string.length, 2) > FUZZY_COMPLEXITY_LIMIT) return undefined;
+  const searchLines = sourceLinesWithEndings(oldString).map((line) => line.trimEnd());
+  if (searchLines.length === 0) return undefined;
+
+  const windowSize = searchLines.length;
+  const searchBlock = searchLines.join("\n");
+  const candidates: Array<{ index: number; score: number }> = [];
+  for (let i = 0; i <= sourceLines.length - windowSize; i += 1) {
+    const windowText = sourceLines.slice(i, i + windowSize).map((line) => line.trimEnd()).join("\n");
+    const lengthDiff = Math.abs(windowText.length - searchBlock.length);
+    if (searchBlock.length === 0 || lengthDiff / searchBlock.length > FUZZY_MATCH_THRESHOLD / WHITESPACE_PENALTY_FACTOR) continue;
+    const rawDistance = levenshtein(windowText, searchBlock);
+    const normalizedDistance = levenshtein(stripWhitespace(windowText), stripWhitespace(searchBlock));
+    const weightedDistance = normalizedDistance + (rawDistance - normalizedDistance) * WHITESPACE_PENALTY_FACTOR;
+    const score = weightedDistance / searchBlock.length;
+    if (score <= FUZZY_MATCH_THRESHOLD) candidates.push({ index: i, score });
+  }
+  if (candidates.length === 0) return undefined;
+
+  candidates.sort((a, b) => a.score - b.score || a.index - b.index);
+  const selected: Array<{ index: number; score: number }> = [];
+  for (const candidate of candidates) {
+    if (!selected.some((match) => Math.abs(match.index - candidate.index) < windowSize)) selected.push(candidate);
+  }
+  if (selected.length === 0) return undefined;
+  const matchRanges = selected.map((match) => ({ start: match.index + 1, end: match.index + windowSize })).sort((a, b) => a.start - b.start);
+  const replacementLines = newString.split("\n");
+  for (const match of [...selected].sort((a, b) => b.index - a.index)) {
+    const indentation = sourceLines[match.index]?.match(/^([ \t]*)/)?.[1] ?? "";
+    let replacement = applyIndentation(replacementLines, indentation).join("\n");
+    if (sourceLines[match.index + windowSize - 1]?.endsWith("\n") && !replacement.endsWith("\n")) replacement += "\n";
+    sourceLines.splice(match.index, windowSize, replacement);
+  }
+  return {
+    content: restoreTrailingNewline(original, restoreOriginalLineEndings(original, sourceLines.join(""))),
+    occurrences: selected.length,
+    strategy: "fuzzy",
+    finalOldString: oldString,
+    finalNewString: newString,
+    matchRanges,
+  };
+}
+
+export function planSingleReplacement(original: string, params: GeminiReplaceParams): ReplacementPlan {
+  if (typeof params.old_string !== "string" || params.old_string.length === 0) throw new Error("old_string must be a non-empty string");
+  if (typeof params.new_string !== "string") throw new Error("new_string must be a string");
+
+  const plan = exactReplacement(original, params)
+    ?? flexibleReplacement(original, params)
+    ?? regexReplacement(original, params)
+    ?? fuzzyReplacement(original, params);
+  const target = params.file_path ? ` in '${params.file_path}'` : "";
+  if (!plan) throw new Error(`Could not find an exact match for old_string${target}.`);
+  if (!params.allow_multiple && plan.occurrences !== 1) {
+    throw new Error(`Failed to edit, expected 1 occurrence but found ${plan.occurrences}${target}. Set allow_multiple=true to replace all.`);
+  }
+  if (plan.finalOldString === plan.finalNewString) throw new Error(`No changes to apply. old_string and new_string are identical${target}.`);
+  return plan;
 }
