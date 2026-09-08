@@ -1,0 +1,12 @@
+{
+  "lsp": {
+    "typescript": {
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--lsp",
+        "--stdio"
+      ]
+    }
+  }
+}
