@@ -18,7 +18,7 @@ Use **pnpm exclusively** in this repository. Never use `npm`, `npx`, `yarn`, or 
 - `gemini`: Gemini CLI-shaped `replace` and `write_file`
 - `deepseek`: Harness-compatible `standard` preset (`read`/`write`/`edit`, conditional `read_image`) or `minimal` preset (`str_replace_editor`)
 
-Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships source directly (`files: ["src"]`) — there is no build step.
+Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships `src/`, `docs/`, `README.md`, and `LICENSE` directly — there is no build step.
 
 Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) are peer dependencies; `koffi` is the only direct dependency (used in `src/tools/deepseek/win32.ts` for Win32 APIs).
 
@@ -70,7 +70,7 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 - `vendor/` is generated: never hand-edit; regenerate with `pnpm fetch-vendors` (`--force` to refresh even when the recorded SHA matches).
 - `vendor/.state.json` records fetched SHAs; it is managed by the fetch script.
 - Treat the Codex engine as a preserved upstream baseline (see Code Style) — behavior-parity changes there need explicit justification and test coverage.
-- Behavior changes to tool schemas/semantics (Gemini exact/flexible/regex/fuzzy, correction errors, approval modification flow, result feedback; DeepSeek observation/version guards; provider-guard stripping) must be reflected in `tests/` and, where user-visible, in `README.md`.
+- Behavior changes to tool schemas/semantics (Gemini exact/flexible/regex/fuzzy, correction errors, approval modification flow, result feedback; DeepSeek observation/version guards and scheduling; provider-guard stripping/conditioning) must be reflected in `tests/` and in the relevant file under `docs/`; keep `README.md` concise and accurate instead of duplicating full behavior detail there.
 
 ## Agent Workflow
 
