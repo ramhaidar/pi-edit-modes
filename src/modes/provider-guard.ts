@@ -543,25 +543,41 @@ function rewriteGoogleCompatibilityApplyPatch(
   return { payload: { ...payload, config: { ...config, tools: nextTools } }, changed: true };
 }
 
-const DEEPSEEK_SHELL_EDIT_GUIDANCE =
-  " In DeepSeek file-edit mode, do not create, overwrite, append, patch, or rewrite files with this shell tool (including redirection, PowerShell Set-Content/WriteAllLines, sed -i, perl -pi, or scripts that write files). Use the write, edit, or str_replace_editor file tools for file mutations. Shell use is limited to inspection and command execution that does not modify files.";
 const SHELL_TOOL_NAMES = new Set(["bash", "shell", "powershell", "pwsh"]);
 
-function appendDeepSeekShellGuidance(tool: unknown): { tool: unknown; changed: boolean } {
+function deepSeekShellEditGuidance(activeTools: readonly string[]): string {
+  const editors = ["write", "edit", "str_replace_editor"].filter((name) =>
+    activeTools.includes(name),
+  );
+  if (editors.length === 0) return "";
+  const editorList =
+    editors.length === 1
+      ? editors[0]!
+      : editors.length === 2
+        ? `${editors[0]} or ${editors[1]}`
+        : `${editors[0]}, ${editors[1]}, or ${editors[2]}`;
+  return ` In DeepSeek file-edit mode, do not create, overwrite, append, patch, or rewrite files with this shell tool (including redirection, PowerShell Set-Content/WriteAllLines, sed -i, perl -pi, or scripts that write files). Use ${editorList} for file mutations. Shell use is limited to inspection and command execution that does not modify files.`;
+}
+
+function appendDeepSeekShellGuidance(
+  tool: unknown,
+  guidance: string,
+): { tool: unknown; changed: boolean } {
   if (!isRecord(tool)) return { tool, changed: false };
   const name = wireName(tool);
   if (!name || !SHELL_TOOL_NAMES.has(name)) return { tool, changed: false };
+  if (!guidance) return { tool, changed: false };
 
   if (isRecord(tool.function)) {
     const description =
       typeof tool.function.description === "string" ? tool.function.description : "";
-    if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
+    if (description.includes(guidance.trim())) return { tool, changed: false };
     return {
       tool: {
         ...tool,
         function: {
           ...tool.function,
-          description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim(),
+          description: `${description}${guidance}`.trim(),
         },
       },
       changed: true,
@@ -569,21 +585,26 @@ function appendDeepSeekShellGuidance(tool: unknown): { tool: unknown; changed: b
   }
 
   const description = typeof tool.description === "string" ? tool.description : "";
-  if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
+  if (description.includes(guidance.trim())) return { tool, changed: false };
   return {
-    tool: { ...tool, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() },
+    tool: { ...tool, description: `${description}${guidance}`.trim() },
     changed: true,
   };
 }
 
-function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
+function guardDeepSeekShellDescriptions(
+  payload: unknown,
+  activeTools: readonly string[],
+): ProviderGuardResult {
   if (!isRecord(payload)) return { payload, changed: false };
+  const guidance = deepSeekShellEditGuidance(activeTools);
+  if (!guidance) return { payload, changed: false };
   let changed = false;
   let nextPayload = payload;
 
   if (Array.isArray(payload.tools)) {
     const tools = payload.tools.map((tool) => {
-      const guarded = appendDeepSeekShellGuidance(tool);
+      const guarded = appendDeepSeekShellGuidance(tool, guidance);
       changed ||= guarded.changed;
       return guarded.tool;
     });
@@ -595,7 +616,7 @@ function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
     const groups = nextPayload.config.tools.map((group) => {
       if (!isRecord(group) || !Array.isArray(group.functionDeclarations)) return group;
       const declarations = group.functionDeclarations.map((tool) => {
-        const guarded = appendDeepSeekShellGuidance(tool);
+        const guarded = appendDeepSeekShellGuidance(tool, guidance);
         googleChanged ||= guarded.changed;
         return guarded.tool;
       });
@@ -696,6 +717,8 @@ export function guardProviderPayload(input: {
   // every provider request.
   const schemas = rewriteDeepSeekFileToolSchemas(stripped.payload);
   let combined = mergeGuardResults(stripped, schemas);
-  if (!input.activeTools?.includes("str_replace_editor")) return combined;
-  return mergeGuardResults(combined, guardDeepSeekShellDescriptions(combined.payload));
+  return mergeGuardResults(
+    combined,
+    guardDeepSeekShellDescriptions(combined.payload, input.activeTools ?? []),
+  );
 }

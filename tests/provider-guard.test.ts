@@ -394,7 +394,7 @@ test("Codex mode removes stale DeepSeek editor", () => {
   assert.deepEqual(names, ["read"]);
 });
 
-test("DeepSeek mode marks bash as non-mutating when str_replace_editor is active", () => {
+test("DeepSeek minimal shell guidance mentions only str_replace_editor", () => {
   const payload = {
     tools: [
       { type: "function", function: { name: "bash", description: "Run a shell command" } },
@@ -410,14 +410,12 @@ test("DeepSeek mode marks bash as non-mutating when str_replace_editor is active
   });
   assert.equal(result.changed, true);
   const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
-  assert.match(
-    bash.function.description,
-    /Use the write, edit, or str_replace_editor file tools for file mutations/,
-  );
+  assert.match(bash.function.description, /Use str_replace_editor for file mutations/);
+  assert.doesNotMatch(bash.function.description, /Use write|Use edit/);
   assert.match(bash.function.description, /WriteAllLines/);
 });
 
-test("DeepSeek shell guard is not applied when str_replace_editor is unavailable", () => {
+test("DeepSeek shell guard is not applied when no DeepSeek mutation tool is active", () => {
   const payload = {
     tools: [{ type: "function", function: { name: "bash", description: "Run a shell command" } }],
   };
@@ -430,6 +428,49 @@ test("DeepSeek shell guard is not applied when str_replace_editor is unavailable
   });
   assert.equal(result.changed, false);
   assert.equal((result.payload as any).tools[0].function.description, "Run a shell command");
+});
+
+test("DeepSeek standard shell guidance mentions only write/edit", () => {
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "bash", description: "Run a shell command" } },
+      { type: "function", function: { name: "write", description: "Write files" } },
+      { type: "function", function: { name: "edit", description: "Edit files" } },
+    ],
+  };
+  const result = guardProviderPayload({
+    payload,
+    mode: "deepseek",
+    codexSupport: { supported: false },
+    codexGuard: passthroughCodexGuard,
+    activeTools: ["bash", "write", "edit"],
+  });
+  const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
+  assert.match(bash.function.description, /Use write or edit for file mutations/);
+  assert.doesNotMatch(bash.function.description, /str_replace_editor/);
+});
+
+test("DeepSeek additive shell guidance mentions every active mutation tool", () => {
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "bash", description: "Run a shell command" } },
+      { type: "function", function: { name: "write", description: "Write files" } },
+      { type: "function", function: { name: "edit", description: "Edit files" } },
+      { type: "function", function: { name: "str_replace_editor", description: "Edit files" } },
+    ],
+  };
+  const result = guardProviderPayload({
+    payload,
+    mode: "deepseek",
+    codexSupport: { supported: false },
+    codexGuard: passthroughCodexGuard,
+    activeTools: ["bash", "write", "edit", "str_replace_editor"],
+  });
+  const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
+  assert.match(
+    bash.function.description,
+    /Use write, edit, or str_replace_editor for file mutations/,
+  );
 });
 
 test("DeepSeek OpenAI wire write/edit schemas hide Pi compatibility aliases", () => {
