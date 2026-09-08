@@ -1,7 +1,18 @@
 import type { DeepSeekPreset, ToolMode } from "../config/types.ts";
-import { DEEPSEEK_TOOL_NAMES, DEPRECATED_GEMINI_TOOL_NAMES, GEMINI_TOOL_NAMES, type ManagedSurface } from "./router.ts";
+import { geminiDescriptions } from "../tools/gemini/lifecycle.ts";
+import {
+  DEEPSEEK_TOOL_NAMES,
+  DEPRECATED_GEMINI_TOOL_NAMES,
+  GEMINI_TOOL_NAMES,
+  type ManagedSurface,
+} from "./router.ts";
 
-export interface ProviderGuardResult { payload: unknown; changed: boolean; violation?: string; fatal?: boolean }
+export interface ProviderGuardResult {
+  payload: unknown;
+  changed: boolean;
+  violation?: string;
+  fatal?: boolean;
+}
 
 export interface CodexProviderSupport {
   supported: boolean;
@@ -10,8 +21,14 @@ export interface CodexProviderSupport {
 
 export type CodexProviderGuard = (payload: unknown, support: any) => ProviderGuardResult;
 
-export function codexProviderToolAvailable(surface: ManagedSurface, activeTools: readonly string[]): boolean {
-  return (surface === "codex-replace" || surface === "codex-additive") && activeTools.includes("apply_patch");
+export function codexProviderToolAvailable(
+  surface: ManagedSurface,
+  activeTools: readonly string[],
+): boolean {
+  return (
+    (surface === "codex-replace" || surface === "codex-additive") &&
+    activeTools.includes("apply_patch")
+  );
 }
 
 const APPLY_PATCH_COMPAT_DESCRIPTION =
@@ -38,9 +55,13 @@ function choiceForces(choice: unknown, name: string): boolean {
   return false;
 }
 
-function forcedName(payload: Record<string, unknown>, names: readonly string[]): string | undefined {
+function forcedName(
+  payload: Record<string, unknown>,
+  names: readonly string[],
+): string | undefined {
   for (const name of names) {
-    if (choiceForces(payload.tool_choice, name) || choiceForces(payload.toolChoice, name)) return name;
+    if (choiceForces(payload.tool_choice, name) || choiceForces(payload.toolChoice, name))
+      return name;
   }
   return undefined;
 }
@@ -76,18 +97,32 @@ function stripTopLevelTools(
   return { payload: { ...payload, tools: nextTools }, changed: true };
 }
 
-function stripGoogleToolConfig(config: Record<string, unknown>, forbidden: ReadonlySet<string>): { config: Record<string, unknown>; changed: boolean; fatal?: string } {
-  if (!isRecord(config.toolConfig) || !isRecord(config.toolConfig.functionCallingConfig)) return { config, changed: false };
+function stripGoogleToolConfig(
+  config: Record<string, unknown>,
+  forbidden: ReadonlySet<string>,
+): { config: Record<string, unknown>; changed: boolean; fatal?: string } {
+  if (!isRecord(config.toolConfig) || !isRecord(config.toolConfig.functionCallingConfig))
+    return { config, changed: false };
   const functionCallingConfig = config.toolConfig.functionCallingConfig;
   if (!Array.isArray(functionCallingConfig.allowedFunctionNames)) return { config, changed: false };
 
-  const names = functionCallingConfig.allowedFunctionNames.filter((name): name is string => typeof name === "string");
+  const names = functionCallingConfig.allowedFunctionNames.filter(
+    (name): name is string => typeof name === "string",
+  );
   const nextNames = names.filter((name) => !forbidden.has(name));
   if (nextNames.length === names.length) return { config, changed: false };
 
-  const mode = typeof functionCallingConfig.mode === "string" ? functionCallingConfig.mode.toUpperCase() : undefined;
+  const mode =
+    typeof functionCallingConfig.mode === "string"
+      ? functionCallingConfig.mode.toUpperCase()
+      : undefined;
   if (mode === "ANY" && names.length > 0 && nextNames.length === 0) {
-    return { config, changed: false, fatal: "Google provider request forces a function call but only forbidden file-edit tools are allowed." };
+    return {
+      config,
+      changed: false,
+      fatal:
+        "Google provider request forces a function call but only forbidden file-edit tools are allowed.",
+    };
   }
 
   return {
@@ -103,7 +138,8 @@ function stripGoogleToolConfig(config: Record<string, unknown>, forbidden: Reado
 }
 
 function googleFunctionCallingMode(config: Record<string, unknown>): string | undefined {
-  if (!isRecord(config.toolConfig) || !isRecord(config.toolConfig.functionCallingConfig)) return undefined;
+  if (!isRecord(config.toolConfig) || !isRecord(config.toolConfig.functionCallingConfig))
+    return undefined;
   const mode = config.toolConfig.functionCallingConfig.mode;
   return typeof mode === "string" ? mode.toUpperCase() : undefined;
 }
@@ -118,7 +154,10 @@ function googleCallableFunctionCount(config: Record<string, unknown>): number {
   return count;
 }
 
-function stripGoogleTools(payload: Record<string, unknown>, forbidden: ReadonlySet<string>): { payload: Record<string, unknown>; changed: boolean; fatal?: string } {
+function stripGoogleTools(
+  payload: Record<string, unknown>,
+  forbidden: ReadonlySet<string>,
+): { payload: Record<string, unknown>; changed: boolean; fatal?: string } {
   if (!isRecord(payload.config)) return { payload, changed: false };
   let config = payload.config;
   let changed = false;
@@ -131,7 +170,9 @@ function stripGoogleTools(payload: Record<string, unknown>, forbidden: ReadonlyS
         nextTools.push(toolGroup);
         continue;
       }
-      const nextDeclarations = toolGroup.functionDeclarations.filter((declaration) => !forbidden.has(wireName(declaration) ?? ""));
+      const nextDeclarations = toolGroup.functionDeclarations.filter(
+        (declaration) => !forbidden.has(wireName(declaration) ?? ""),
+      );
       if (nextDeclarations.length === toolGroup.functionDeclarations.length) {
         nextTools.push(toolGroup);
         continue;
@@ -155,11 +196,16 @@ function stripGoogleTools(payload: Record<string, unknown>, forbidden: ReadonlyS
     changed = true;
   }
 
-  if (changed && googleFunctionCallingMode(config) === "ANY" && googleCallableFunctionCount(config) === 0) {
+  if (
+    changed &&
+    googleFunctionCallingMode(config) === "ANY" &&
+    googleCallableFunctionCount(config) === 0
+  ) {
     return {
       payload: { ...payload, config },
       changed: true,
-      fatal: "Google provider request requires a function call but filtering removed every function declaration.",
+      fatal:
+        "Google provider request requires a function call but filtering removed every function declaration.",
     };
   }
   return changed ? { payload: { ...payload, config }, changed: true } : { payload, changed: false };
@@ -168,12 +214,25 @@ function stripGoogleTools(payload: Record<string, unknown>, forbidden: ReadonlyS
 function stripTools(payload: unknown, forbidden: ReadonlySet<string>): ProviderGuardResult {
   if (!isRecord(payload)) return { payload, changed: false };
   const forced = forcedName(payload, [...forbidden]);
-  if (forced) return { payload, changed: false, fatal: true, violation: `Provider request forces forbidden tool '${forced}'.` };
+  if (forced)
+    return {
+      payload,
+      changed: false,
+      fatal: true,
+      violation: `Provider request forces forbidden tool '${forced}'.`,
+    };
 
   const top = stripTopLevelTools(payload, forbidden);
-  if (top.fatal) return { payload: top.payload, changed: top.changed, fatal: true, violation: top.fatal };
+  if (top.fatal)
+    return { payload: top.payload, changed: top.changed, fatal: true, violation: top.fatal };
   const google = stripGoogleTools(top.payload, forbidden);
-  if (google.fatal) return { payload: google.payload, changed: top.changed || google.changed, fatal: true, violation: google.fatal };
+  if (google.fatal)
+    return {
+      payload: google.payload,
+      changed: top.changed || google.changed,
+      fatal: true,
+      violation: google.fatal,
+    };
   const changed = top.changed || google.changed;
   return {
     payload: google.payload,
@@ -182,26 +241,87 @@ function stripTools(payload: unknown, forbidden: ReadonlySet<string>): ProviderG
   };
 }
 
+function rewriteWireToolDescription(
+  tool: unknown,
+  descriptions: { replace: string; write_file: string },
+): { tool: unknown; changed: boolean } {
+  const name = wireName(tool);
+  const description =
+    name === "replace"
+      ? descriptions.replace
+      : name === "write_file"
+        ? descriptions.write_file
+        : undefined;
+  if (!description || !isRecord(tool)) return { tool, changed: false };
+  if (isRecord(tool.function)) {
+    if (tool.function.description === description) return { tool, changed: false };
+    return { tool: { ...tool, function: { ...tool.function, description } }, changed: true };
+  }
+  if (tool.description === description) return { tool, changed: false };
+  return { tool: { ...tool, description }, changed: true };
+}
+
+function rewriteGeminiDescriptions(payload: unknown, modelId?: string): ProviderGuardResult {
+  if (!isRecord(payload)) return { payload, changed: false };
+  const descriptions = geminiDescriptions(modelId);
+  let next = payload;
+  let changed = false;
+
+  if (Array.isArray(next.tools)) {
+    const tools = next.tools.map((tool) => {
+      const rewritten = rewriteWireToolDescription(tool, descriptions);
+      changed ||= rewritten.changed;
+      return rewritten.tool;
+    });
+    if (changed) next = { ...next, tools };
+  }
+
+  if (isRecord(next.config) && Array.isArray(next.config.tools)) {
+    let googleChanged = false;
+    const groups = next.config.tools.map((group) => {
+      if (!isRecord(group) || !Array.isArray(group.functionDeclarations)) return group;
+      let groupChanged = false;
+      const declarations = group.functionDeclarations.map((declaration) => {
+        const rewritten = rewriteWireToolDescription(declaration, descriptions);
+        groupChanged ||= rewritten.changed;
+        return rewritten.tool;
+      });
+      if (!groupChanged) return group;
+      googleChanged = true;
+      return { ...group, functionDeclarations: declarations };
+    });
+    if (googleChanged) {
+      next = { ...next, config: { ...next.config, tools: groups } };
+      changed = true;
+    }
+  }
+
+  return { payload: next, changed };
+}
+
 function googleApplyPatchDeclarations(payload: unknown): Array<Record<string, unknown>> {
-  if (!isRecord(payload) || !isRecord(payload.config) || !Array.isArray(payload.config.tools)) return [];
+  if (!isRecord(payload) || !isRecord(payload.config) || !Array.isArray(payload.config.tools))
+    return [];
   const entries: Array<Record<string, unknown>> = [];
   for (const toolGroup of payload.config.tools) {
     if (!isRecord(toolGroup) || !Array.isArray(toolGroup.functionDeclarations)) continue;
     for (const declaration of toolGroup.functionDeclarations) {
-      if (isRecord(declaration) && wireName(declaration) === "apply_patch") entries.push(declaration);
+      if (isRecord(declaration) && wireName(declaration) === "apply_patch")
+        entries.push(declaration);
     }
   }
   return entries;
 }
 
-function googleFunctionParameters(declaration: Record<string, unknown>): Record<string, unknown> | undefined {
+function googleFunctionParameters(
+  declaration: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   if (isRecord(declaration.parametersJsonSchema)) return declaration.parametersJsonSchema;
   if (isRecord(declaration.parameters)) return declaration.parameters;
   if (isRecord(declaration.inputSchema)) return declaration.inputSchema;
   if (isRecord(declaration.input_schema)) return declaration.input_schema;
   return undefined;
 }
-
 
 /**
  * Base model-facing schemas from DeepSeek Harness dsh-tool-fs.
@@ -216,7 +336,10 @@ function googleFunctionParameters(declaration: Record<string, unknown>): Record<
 export const DEEPSEEK_WRITE_WIRE_SCHEMA = {
   type: "object",
   properties: {
-    file_path: { type: "string", description: "Path to write, resolved by the filesystem backend." },
+    file_path: {
+      type: "string",
+      description: "Path to write, resolved by the filesystem backend.",
+    },
     content: { type: "string", description: "Full UTF-8 text content to write." },
   },
   required: ["file_path", "content"],
@@ -228,8 +351,15 @@ export const DEEPSEEK_EDIT_WIRE_SCHEMA = {
   properties: {
     file_path: { type: "string", description: "Path to edit, resolved by the filesystem backend." },
     old_string: { type: "string", description: "Literal text to replace. Must match exactly." },
-    new_string: { type: "string", description: "Literal replacement text. Use an empty string to delete the match." },
-    replace_all: { type: "boolean", description: "Replace all matches. Defaults to false; when false, old_string must appear exactly once." },
+    new_string: {
+      type: "string",
+      description: "Literal replacement text. Use an empty string to delete the match.",
+    },
+    replace_all: {
+      type: "boolean",
+      description:
+        "Replace all matches. Defaults to false; when false, old_string must appear exactly once.",
+    },
   },
   required: ["file_path", "old_string", "new_string"],
   additionalProperties: false,
@@ -255,24 +385,37 @@ function replaceSchemaField(
 function rewriteDeepSeekToolSchema(tool: unknown): { tool: unknown; changed: boolean } {
   if (!isRecord(tool)) return { tool, changed: false };
   const name = wireName(tool);
-  const schema = name === "write"
-    ? DEEPSEEK_WRITE_WIRE_SCHEMA as unknown as Record<string, unknown>
-    : name === "edit"
-      ? DEEPSEEK_EDIT_WIRE_SCHEMA as unknown as Record<string, unknown>
-      : undefined;
+  const schema =
+    name === "write"
+      ? (DEEPSEEK_WRITE_WIRE_SCHEMA as unknown as Record<string, unknown>)
+      : name === "edit"
+        ? (DEEPSEEK_EDIT_WIRE_SCHEMA as unknown as Record<string, unknown>)
+        : undefined;
   if (!schema) return { tool, changed: false };
 
   // OpenAI-compatible function tool.
   if (isRecord(tool.function)) {
-    const replaced = replaceSchemaField(tool.function, schema, ["parameters", "parametersJsonSchema", "inputSchema", "input_schema"]);
+    const replaced = replaceSchemaField(tool.function, schema, [
+      "parameters",
+      "parametersJsonSchema",
+      "inputSchema",
+      "input_schema",
+    ]);
     // Current OpenAI-compatible serializers use `parameters`; if a minimal test or
     // provider shim omitted the field, install it rather than leaking internal aliases.
-    const fn = replaced.changed ? replaced.owner : { ...tool.function, parameters: deepCloneSchema(schema) };
+    const fn = replaced.changed
+      ? replaced.owner
+      : { ...tool.function, parameters: deepCloneSchema(schema) };
     return { tool: { ...tool, function: fn }, changed: true };
   }
 
   // Anthropic, Google declarations and generic Pi serializer shapes.
-  const replaced = replaceSchemaField(tool, schema, ["input_schema", "parametersJsonSchema", "parameters", "inputSchema"]);
+  const replaced = replaceSchemaField(tool, schema, [
+    "input_schema",
+    "parametersJsonSchema",
+    "parameters",
+    "inputSchema",
+  ]);
   if (replaced.changed) return { tool: replaced.owner, changed: true };
 
   // A named function declaration with no schema should still get the Harness
@@ -324,7 +467,10 @@ function googleApplyPatchIsCompatibilityFunction(declaration: Record<string, unk
   return true;
 }
 
-function rewriteGoogleCompatibilityApplyPatch(payload: unknown, support: CodexProviderSupport): ProviderGuardResult {
+function rewriteGoogleCompatibilityApplyPatch(
+  payload: unknown,
+  support: CodexProviderSupport,
+): ProviderGuardResult {
   if (!isRecord(payload)) return { payload, changed: false };
   const entries = googleApplyPatchDeclarations(payload);
   if (entries.length === 0) return { payload, changed: false };
@@ -335,7 +481,8 @@ function rewriteGoogleCompatibilityApplyPatch(payload: unknown, support: CodexPr
       payload,
       changed: false,
       fatal: true,
-      violation: "apply_patch native serialization invariant violated: Google functionDeclarations cannot carry the native Codex grammar tool",
+      violation:
+        "apply_patch native serialization invariant violated: Google functionDeclarations cannot carry the native Codex grammar tool",
     };
   }
   if (entries.some((entry) => !googleApplyPatchIsCompatibilityFunction(entry))) {
@@ -343,7 +490,8 @@ function rewriteGoogleCompatibilityApplyPatch(payload: unknown, support: CodexPr
       payload,
       changed: false,
       fatal: true,
-      violation: "apply_patch compatibility serialization invariant violated: expected a Google functionDeclaration with one required string `input` parameter",
+      violation:
+        "apply_patch compatibility serialization invariant violated: expected a Google functionDeclaration with one required string `input` parameter",
     };
   }
 
@@ -360,7 +508,6 @@ function rewriteGoogleCompatibilityApplyPatch(payload: unknown, support: CodexPr
   return { payload: { ...payload, config: { ...config, tools: nextTools } }, changed: true };
 }
 
-
 const DEEPSEEK_SHELL_EDIT_GUIDANCE =
   " In DeepSeek file-edit mode, do not create, overwrite, append, patch, or rewrite files with this shell tool (including redirection, PowerShell Set-Content/WriteAllLines, sed -i, perl -pi, or scripts that write files). Use the write, edit, or str_replace_editor file tools for file mutations. Shell use is limited to inspection and command execution that does not modify files.";
 const SHELL_TOOL_NAMES = new Set(["bash", "shell", "powershell", "pwsh"]);
@@ -371,17 +518,27 @@ function appendDeepSeekShellGuidance(tool: unknown): { tool: unknown; changed: b
   if (!name || !SHELL_TOOL_NAMES.has(name)) return { tool, changed: false };
 
   if (isRecord(tool.function)) {
-    const description = typeof tool.function.description === "string" ? tool.function.description : "";
+    const description =
+      typeof tool.function.description === "string" ? tool.function.description : "";
     if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
     return {
-      tool: { ...tool, function: { ...tool.function, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() } },
+      tool: {
+        ...tool,
+        function: {
+          ...tool.function,
+          description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim(),
+        },
+      },
       changed: true,
     };
   }
 
   const description = typeof tool.description === "string" ? tool.description : "";
   if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
-  return { tool: { ...tool, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() }, changed: true };
+  return {
+    tool: { ...tool, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() },
+    changed: true,
+  };
 }
 
 function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
@@ -418,7 +575,10 @@ function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
   return { payload: nextPayload, changed };
 }
 
-function mergeGuardResults(first: ProviderGuardResult, second: ProviderGuardResult): ProviderGuardResult {
+function mergeGuardResults(
+  first: ProviderGuardResult,
+  second: ProviderGuardResult,
+): ProviderGuardResult {
   return {
     payload: second.payload,
     changed: first.changed || second.changed,
@@ -435,11 +595,16 @@ export function guardProviderPayload(input: {
   activeTools?: readonly string[];
   surface?: ManagedSurface;
   deepseekPreset?: DeepSeekPreset;
+  modelId?: string;
 }): ProviderGuardResult {
   const strictSurface = input.surface?.endsWith("-replace") === true;
   const deprecatedGemini = new Set<string>(DEPRECATED_GEMINI_TOOL_NAMES);
   if (input.mode === "codex") {
-    const otherCustomTools = new Set<string>([...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES, ...DEPRECATED_GEMINI_TOOL_NAMES]);
+    const otherCustomTools = new Set<string>([
+      ...GEMINI_TOOL_NAMES,
+      ...DEEPSEEK_TOOL_NAMES,
+      ...DEPRECATED_GEMINI_TOOL_NAMES,
+    ]);
     if (strictSurface) {
       otherCustomTools.add("edit");
       otherCustomTools.add("write");
@@ -467,7 +632,9 @@ export function guardProviderPayload(input: {
       forbidden.add("edit");
       forbidden.add("write");
     }
-    if (input.activeTools) for (const name of GEMINI_TOOL_NAMES) if (!input.activeTools.includes(name)) forbidden.add(name);
+    if (input.activeTools)
+      for (const name of GEMINI_TOOL_NAMES)
+        if (!input.activeTools.includes(name)) forbidden.add(name);
   } else if (input.mode === "deepseek") {
     for (const name of GEMINI_TOOL_NAMES) forbidden.add(name);
     const preset = input.deepseekPreset ?? "standard";
@@ -478,10 +645,15 @@ export function guardProviderPayload(input: {
       forbidden.add("edit");
       forbidden.add("read_image");
     }
-    if (input.activeTools) for (const name of DEEPSEEK_TOOL_NAMES) if (!input.activeTools.includes(name)) forbidden.add(name);
+    if (input.activeTools)
+      for (const name of DEEPSEEK_TOOL_NAMES)
+        if (!input.activeTools.includes(name)) forbidden.add(name);
   }
   const stripped = stripTools(input.payload, forbidden);
-  if (stripped.fatal || input.mode !== "deepseek") return stripped;
+  if (stripped.fatal) return stripped;
+  if (input.mode === "gemini")
+    return mergeGuardResults(stripped, rewriteGeminiDescriptions(stripped.payload, input.modelId));
+  if (input.mode !== "deepseek") return stripped;
 
   // Internal Pi validation accepts compatibility aliases for write/edit so
   // mutation guards written for Pi's native tools cannot crash on DeepSeek args.

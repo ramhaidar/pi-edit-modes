@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { codexProviderToolAvailable, guardProviderPayload, type ProviderGuardResult } from "../src/modes/provider-guard.ts";
+import {
+  codexProviderToolAvailable,
+  guardProviderPayload,
+  type ProviderGuardResult,
+} from "../src/modes/provider-guard.ts";
 
 const compatibilitySupport = { supported: true, transport: "compatibility" as const };
 const unavailableSupport = { supported: false };
-const passthroughCodexGuard = (payload: unknown): ProviderGuardResult => ({ payload, changed: false });
+const passthroughCodexGuard = (payload: unknown): ProviderGuardResult => ({
+  payload,
+  changed: false,
+});
 
 function declaration(name: string, description = `${name} description`) {
   return {
@@ -21,7 +28,10 @@ function declaration(name: string, description = `${name} description`) {
 
 test("Codex provider availability follows effective active surface, not registered-tool availability", () => {
   assert.equal(codexProviderToolAvailable("codex-replace", ["apply_patch"]), true);
-  assert.equal(codexProviderToolAvailable("codex-additive", ["edit", "write", "apply_patch"]), true);
+  assert.equal(
+    codexProviderToolAvailable("codex-additive", ["edit", "write", "apply_patch"]),
+    true,
+  );
   assert.equal(codexProviderToolAvailable("codex-unavailable", ["apply_patch"]), false);
   assert.equal(codexProviderToolAvailable("codex-replace", ["edit", "write"]), false);
   assert.equal(codexProviderToolAvailable("gemini-replace", ["apply_patch"]), false);
@@ -42,14 +52,60 @@ test("Gemini mode removes stale apply_patch from native Google functionDeclarati
     activeTools: ["replace"],
   });
   assert.equal(result.changed, true);
-  const names = (result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.name);
+  const names = (result.payload as any).config.tools[0].functionDeclarations.map(
+    (x: any) => x.name,
+  );
   assert.deepEqual(names, ["replace"]);
+});
+
+test("Gemini provider descriptions follow the active model family", () => {
+  const payload = {
+    config: {
+      tools: [
+        {
+          functionDeclarations: [
+            declaration("replace", "stale"),
+            declaration("write_file", "stale"),
+          ],
+        },
+      ],
+    },
+  };
+  const gemini3 = guardProviderPayload({
+    payload,
+    mode: "gemini",
+    codexSupport: compatibilitySupport,
+    codexGuard: passthroughCodexGuard,
+    activeTools: ["replace", "write_file"],
+    modelId: "gemini-3-pro",
+  });
+  const gemini3Descriptions = (gemini3.payload as any).config.tools[0].functionDeclarations.map(
+    (item: any) => item.description,
+  );
+  assert.match(gemini3Descriptions[0], /surgical edits/i);
+  assert.match(gemini3Descriptions[1], /parent directories/i);
+
+  const legacy = guardProviderPayload({
+    payload,
+    mode: "gemini",
+    codexSupport: compatibilitySupport,
+    codexGuard: passthroughCodexGuard,
+    activeTools: ["replace", "write_file"],
+    modelId: "gemini-2.5-pro",
+  });
+  const legacyDescriptions = (legacy.payload as any).config.tools[0].functionDeclarations.map(
+    (item: any) => item.description,
+  );
+  assert.match(legacyDescriptions[0], /read the current file first/i);
+  assert.notEqual(legacyDescriptions[0], gemini3Descriptions[0]);
 });
 
 test("Codex mode rewrites Google apply_patch compatibility description", () => {
   const payload = {
     model: "gemini-x",
-    config: { tools: [{ functionDeclarations: [declaration("apply_patch", "freeform description")] }] },
+    config: {
+      tools: [{ functionDeclarations: [declaration("apply_patch", "freeform description")] }],
+    },
   };
   const result = guardProviderPayload({
     payload,
@@ -65,7 +121,9 @@ test("Codex mode rewrites Google apply_patch compatibility description", () => {
 
 test("Codex unavailable removes apply_patch from Google wire payload", () => {
   const payload = {
-    config: { tools: [{ functionDeclarations: [declaration("apply_patch"), declaration("other")] }] },
+    config: {
+      tools: [{ functionDeclarations: [declaration("apply_patch"), declaration("other")] }],
+    },
   };
   const result = guardProviderPayload({
     payload,
@@ -74,14 +132,19 @@ test("Codex unavailable removes apply_patch from Google wire payload", () => {
     codexGuard: passthroughCodexGuard,
   });
   assert.equal(result.changed, true);
-  assert.deepEqual((result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.name), ["other"]);
+  assert.deepEqual(
+    (result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.name),
+    ["other"],
+  );
 });
 
 test("Google allowedFunctionNames is pruned with forbidden tools", () => {
   const payload = {
     config: {
       tools: [{ functionDeclarations: [declaration("replace"), declaration("apply_patch")] }],
-      toolConfig: { functionCallingConfig: { mode: "AUTO", allowedFunctionNames: ["replace", "apply_patch"] } },
+      toolConfig: {
+        functionCallingConfig: { mode: "AUTO", allowedFunctionNames: ["replace", "apply_patch"] },
+      },
     },
   };
   const result = guardProviderPayload({
@@ -91,7 +154,10 @@ test("Google allowedFunctionNames is pruned with forbidden tools", () => {
     codexGuard: passthroughCodexGuard,
     activeTools: ["replace"],
   });
-  assert.deepEqual((result.payload as any).config.toolConfig.functionCallingConfig.allowedFunctionNames, ["replace"]);
+  assert.deepEqual(
+    (result.payload as any).config.toolConfig.functionCallingConfig.allowedFunctionNames,
+    ["replace"],
+  );
 });
 
 test("Google ANY with only forbidden allowed functions fails closed", () => {
@@ -144,7 +210,10 @@ test("Google ANY remains valid when another callable declaration survives filter
     activeTools: [],
   });
   assert.equal(result.fatal, undefined);
-  assert.deepEqual((result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.name), ["other"]);
+  assert.deepEqual(
+    (result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.name),
+    ["other"],
+  );
 });
 
 test("top-level required tool choice fails closed when filtering removes every tool", () => {
@@ -179,11 +248,16 @@ test("top-level required tool choice remains valid when another tool survives fi
     activeTools: [],
   });
   assert.equal(result.fatal, undefined);
-  assert.deepEqual((result.payload as any).tools.map((tool: any) => tool.function.name), ["other"]);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.function.name),
+    ["other"],
+  );
 });
 
 test("top-level OpenAI/Anthropic-style stale tools are still removed", () => {
-  const payload = { tools: [{ name: "apply_patch" }, { name: "replace" }, { name: "replace_file_content" }] };
+  const payload = {
+    tools: [{ name: "apply_patch" }, { name: "replace" }, { name: "replace_file_content" }],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "pi",
@@ -194,14 +268,16 @@ test("top-level OpenAI/Anthropic-style stale tools are still removed", () => {
 });
 
 test("DeepSeek standard strict surface removes Codex/Gemini/minimal editor tools", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "apply_patch" } },
-    { type: "function", function: { name: "replace" } },
-    { type: "function", function: { name: "str_replace_editor" } },
-    { type: "function", function: { name: "read" } },
-    { type: "function", function: { name: "edit" } },
-    { type: "function", function: { name: "write" } },
-  ] };
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "apply_patch" } },
+      { type: "function", function: { name: "replace" } },
+      { type: "function", function: { name: "str_replace_editor" } },
+      { type: "function", function: { name: "read" } },
+      { type: "function", function: { name: "edit" } },
+      { type: "function", function: { name: "write" } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -216,12 +292,14 @@ test("DeepSeek standard strict surface removes Codex/Gemini/minimal editor tools
 });
 
 test("Gemini strict surface is final wire authority over externally reactivated edit/write", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "edit" } },
-    { type: "function", function: { name: "write" } },
-    { type: "function", function: { name: "replace" } },
-    { type: "function", function: { name: "write_file" } },
-  ] };
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "edit" } },
+      { type: "function", function: { name: "write" } },
+      { type: "function", function: { name: "replace" } },
+      { type: "function", function: { name: "write_file" } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "gemini",
@@ -230,17 +308,22 @@ test("Gemini strict surface is final wire authority over externally reactivated 
     activeTools: ["edit", "write", "replace", "write_file"],
     surface: "gemini-replace",
   });
-  assert.deepEqual((result.payload as any).tools.map((tool: any) => tool.function.name), ["replace", "write_file"]);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.function.name),
+    ["replace", "write_file"],
+  );
 });
 
 test("DeepSeek minimal strict surface exposes only str_replace_editor from filesystem families", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "read" } },
-    { type: "function", function: { name: "read_image" } },
-    { type: "function", function: { name: "edit" } },
-    { type: "function", function: { name: "write" } },
-    { type: "function", function: { name: "str_replace_editor" } },
-  ] };
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "read" } },
+      { type: "function", function: { name: "read_image" } },
+      { type: "function", function: { name: "edit" } },
+      { type: "function", function: { name: "write" } },
+      { type: "function", function: { name: "str_replace_editor" } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -250,15 +333,19 @@ test("DeepSeek minimal strict surface exposes only str_replace_editor from files
     surface: "deepseek-replace",
     deepseekPreset: "minimal",
   });
-  assert.deepEqual((result.payload as any).tools.map((tool: any) => tool.function.name), ["str_replace_editor"]);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.function.name),
+    ["str_replace_editor"],
+  );
 });
 
-
 test("Codex mode removes stale DeepSeek editor", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "str_replace_editor" } },
-    { type: "function", function: { name: "read" } },
-  ] };
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "str_replace_editor" } },
+      { type: "function", function: { name: "read" } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "codex",
@@ -271,10 +358,12 @@ test("Codex mode removes stale DeepSeek editor", () => {
 });
 
 test("DeepSeek mode marks bash as non-mutating when str_replace_editor is active", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "bash", description: "Run a shell command" } },
-    { type: "function", function: { name: "str_replace_editor", description: "Edit files" } },
-  ] };
+  const payload = {
+    tools: [
+      { type: "function", function: { name: "bash", description: "Run a shell command" } },
+      { type: "function", function: { name: "str_replace_editor", description: "Edit files" } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -284,14 +373,17 @@ test("DeepSeek mode marks bash as non-mutating when str_replace_editor is active
   });
   assert.equal(result.changed, true);
   const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
-  assert.match(bash.function.description, /Use the write, edit, or str_replace_editor file tools for file mutations/);
+  assert.match(
+    bash.function.description,
+    /Use the write, edit, or str_replace_editor file tools for file mutations/,
+  );
   assert.match(bash.function.description, /WriteAllLines/);
 });
 
 test("DeepSeek shell guard is not applied when str_replace_editor is unavailable", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "bash", description: "Run a shell command" } },
-  ] };
+  const payload = {
+    tools: [{ type: "function", function: { name: "bash", description: "Run a shell command" } }],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -304,10 +396,32 @@ test("DeepSeek shell guard is not applied when str_replace_editor is unavailable
 });
 
 test("DeepSeek OpenAI wire write/edit schemas hide Pi compatibility aliases", () => {
-  const payload = { tools: [
-    { type: "function", function: { name: "write", parameters: { type: "object", properties: { file_path: {}, content: {}, path: {} }, required: ["file_path", "content"] } } },
-    { type: "function", function: { name: "edit", parameters: { type: "object", properties: { file_path: {}, old_string: {}, new_string: {}, path: {}, edits: {} }, required: ["file_path", "old_string", "new_string"] } } },
-  ] };
+  const payload = {
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "write",
+          parameters: {
+            type: "object",
+            properties: { file_path: {}, content: {}, path: {} },
+            required: ["file_path", "content"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "edit",
+          parameters: {
+            type: "object",
+            properties: { file_path: {}, old_string: {}, new_string: {}, path: {}, edits: {} },
+            required: ["file_path", "old_string", "new_string"],
+          },
+        },
+      },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -319,7 +433,12 @@ test("DeepSeek OpenAI wire write/edit schemas hide Pi compatibility aliases", ()
   assert.deepEqual(Object.keys(write.properties), ["file_path", "content"]);
   assert.deepEqual(write.required, ["file_path", "content"]);
   assert.equal(write.additionalProperties, false);
-  assert.deepEqual(Object.keys(edit.properties), ["file_path", "old_string", "new_string", "replace_all"]);
+  assert.deepEqual(Object.keys(edit.properties), [
+    "file_path",
+    "old_string",
+    "new_string",
+    "replace_all",
+  ]);
   assert.deepEqual(edit.required, ["file_path", "old_string", "new_string"]);
   assert.equal(edit.additionalProperties, false);
 });
@@ -327,10 +446,20 @@ test("DeepSeek OpenAI wire write/edit schemas hide Pi compatibility aliases", ()
 test("DeepSeek Google wire write/edit schemas hide Pi compatibility aliases", () => {
   const payload = {
     config: {
-      tools: [{ functionDeclarations: [
-        { name: "write", parametersJsonSchema: { type: "object", properties: { path: {}, content: {} } } },
-        { name: "edit", parametersJsonSchema: { type: "object", properties: { path: {}, edits: {} } } },
-      ] }],
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "write",
+              parametersJsonSchema: { type: "object", properties: { path: {}, content: {} } },
+            },
+            {
+              name: "edit",
+              parametersJsonSchema: { type: "object", properties: { path: {}, edits: {} } },
+            },
+          ],
+        },
+      ],
     },
   };
   const result = guardProviderPayload({
@@ -340,16 +469,25 @@ test("DeepSeek Google wire write/edit schemas hide Pi compatibility aliases", ()
     codexGuard: passthroughCodexGuard,
     activeTools: ["write", "edit"],
   });
-  const [write, edit] = (result.payload as any).config.tools[0].functionDeclarations.map((x: any) => x.parametersJsonSchema);
+  const [write, edit] = (result.payload as any).config.tools[0].functionDeclarations.map(
+    (x: any) => x.parametersJsonSchema,
+  );
   assert.deepEqual(Object.keys(write.properties), ["file_path", "content"]);
-  assert.deepEqual(Object.keys(edit.properties), ["file_path", "old_string", "new_string", "replace_all"]);
+  assert.deepEqual(Object.keys(edit.properties), [
+    "file_path",
+    "old_string",
+    "new_string",
+    "replace_all",
+  ]);
 });
 
 test("DeepSeek Anthropic wire write/edit schemas hide Pi compatibility aliases", () => {
-  const payload = { tools: [
-    { name: "write", input_schema: { type: "object", properties: { path: {}, content: {} } } },
-    { name: "edit", input_schema: { type: "object", properties: { path: {}, edits: {} } } },
-  ] };
+  const payload = {
+    tools: [
+      { name: "write", input_schema: { type: "object", properties: { path: {}, content: {} } } },
+      { name: "edit", input_schema: { type: "object", properties: { path: {}, edits: {} } } },
+    ],
+  };
   const result = guardProviderPayload({
     payload,
     mode: "deepseek",
@@ -359,5 +497,10 @@ test("DeepSeek Anthropic wire write/edit schemas hide Pi compatibility aliases",
   });
   const [write, edit] = (result.payload as any).tools.map((x: any) => x.input_schema);
   assert.deepEqual(Object.keys(write.properties), ["file_path", "content"]);
-  assert.deepEqual(Object.keys(edit.properties), ["file_path", "old_string", "new_string", "replace_all"]);
+  assert.deepEqual(Object.keys(edit.properties), [
+    "file_path",
+    "old_string",
+    "new_string",
+    "replace_all",
+  ]);
 });

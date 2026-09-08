@@ -2,8 +2,17 @@ import type { DeepSeekPreset, ToolMode, ToolSurface } from "../config/types.ts";
 
 export const GEMINI_TOOL_NAMES = ["replace", "write_file"] as const;
 export const DEEPSEEK_TOOL_NAMES = ["str_replace_editor", "read_image"] as const;
-export const DEPRECATED_GEMINI_TOOL_NAMES = ["replace_file_content", "multi_replace_file_content", "write_to_file"] as const;
-export const MANAGED_CUSTOM_TOOLS = ["apply_patch", ...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES, ...DEPRECATED_GEMINI_TOOL_NAMES] as const;
+export const DEPRECATED_GEMINI_TOOL_NAMES = [
+  "replace_file_content",
+  "multi_replace_file_content",
+  "write_to_file",
+] as const;
+export const MANAGED_CUSTOM_TOOLS = [
+  "apply_patch",
+  ...GEMINI_TOOL_NAMES,
+  ...DEEPSEEK_TOOL_NAMES,
+  ...DEPRECATED_GEMINI_TOOL_NAMES,
+] as const;
 
 export type ManagedSurface =
   | "pi"
@@ -29,7 +38,13 @@ export interface ToolOwnership {
 }
 
 export function initialToolOwnership(): ToolOwnership {
-  return { surface: "pi", suppressesNative: false, readRemovedByUs: false, editRemovedByUs: false, writeRemovedByUs: false };
+  return {
+    surface: "pi",
+    suppressesNative: false,
+    readRemovedByUs: false,
+    editRemovedByUs: false,
+    writeRemovedByUs: false,
+  };
 }
 
 function insertAt(tools: string[], name: string, index?: number): void {
@@ -38,13 +53,19 @@ function insertAt(tools: string[], name: string, index?: number): void {
   tools.splice(target, 0, name);
 }
 
-function restoreNative(tools: string[], ownership: ToolOwnership, available: ReadonlySet<string>): void {
+function restoreNative(
+  tools: string[],
+  ownership: ToolOwnership,
+  available: ReadonlySet<string>,
+): void {
   const candidates = [
     { name: "read", owned: ownership.readRemovedByUs, index: ownership.readRestoreIndex },
     { name: "edit", owned: ownership.editRemovedByUs, index: ownership.editRestoreIndex },
     { name: "write", owned: ownership.writeRemovedByUs, index: ownership.writeRestoreIndex },
   ].filter((item) => item.owned && !tools.includes(item.name) && available.has(item.name));
-  candidates.sort((a, b) => (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER));
+  candidates.sort(
+    (a, b) => (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER),
+  );
   for (const item of candidates) insertAt(tools, item.name, item.index);
   ownership.readRemovedByUs = false;
   ownership.editRemovedByUs = false;
@@ -84,14 +105,22 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   tools = removeManagedCustomTools(tools);
 
   const availableGemini = GEMINI_TOOL_NAMES.filter((name) => input.availableTools.has(name));
-  const codexActive = input.desiredMode === "codex" && input.codexSupported && input.availableTools.has("apply_patch");
+  const codexActive =
+    input.desiredMode === "codex" &&
+    input.codexSupported &&
+    input.availableTools.has("apply_patch");
   const geminiActive = input.desiredMode === "gemini" && availableGemini.length > 0;
   const deepseekPreset = input.deepseekPreset ?? "standard";
-  const deepseekStandardAvailable = ["read", "write", "edit"].every((name) => input.availableTools.has(name));
+  const deepseekStandardAvailable = ["read", "write", "edit"].every((name) =>
+    input.availableTools.has(name),
+  );
   const deepseekMinimalAvailable = input.availableTools.has("str_replace_editor");
-  const deepseekActive = input.desiredMode === "deepseek" && (deepseekPreset === "minimal" ? deepseekMinimalAvailable : deepseekStandardAvailable);
+  const deepseekActive =
+    input.desiredMode === "deepseek" &&
+    (deepseekPreset === "minimal" ? deepseekMinimalAvailable : deepseekStandardAvailable);
   const suppressEditWrite = (codexActive || geminiActive) && input.surface === "replace";
-  const suppressDeepSeekMinimal = deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
+  const suppressDeepSeekMinimal =
+    deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
   const suppressNative = suppressEditWrite || suppressDeepSeekMinimal;
 
   if (!suppressNative) {
@@ -146,9 +175,20 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
     if (deepseekPreset === "minimal") {
       if (!tools.includes("str_replace_editor")) tools.push("str_replace_editor");
     } else {
-      for (const name of ["read", "write", "edit"] as const) if (!tools.includes(name)) tools.push(name);
-      if (input.deepseekImageSupported && input.availableTools.has("read_image") && !tools.includes("read_image")) tools.push("read_image");
-      if (input.surface === "additive" && input.availableTools.has("str_replace_editor") && !tools.includes("str_replace_editor")) tools.push("str_replace_editor");
+      for (const name of ["read", "write", "edit"] as const)
+        if (!tools.includes(name)) tools.push(name);
+      if (
+        input.deepseekImageSupported &&
+        input.availableTools.has("read_image") &&
+        !tools.includes("read_image")
+      )
+        tools.push("read_image");
+      if (
+        input.surface === "additive" &&
+        input.availableTools.has("str_replace_editor") &&
+        !tools.includes("str_replace_editor")
+      )
+        tools.push("str_replace_editor");
     }
     surface = input.surface === "additive" ? "deepseek-additive" : "deepseek-replace";
   }
@@ -162,6 +202,8 @@ export function sameToolList(a: readonly string[], b: readonly string[]): boolea
 }
 
 export function managedFileToolSurface(activeTools: readonly string[]): string {
-  const relevant = ["read", "edit", "write", ...MANAGED_CUSTOM_TOOLS].filter((name) => activeTools.includes(name));
+  const relevant = ["read", "edit", "write", ...MANAGED_CUSTOM_TOOLS].filter((name) =>
+    activeTools.includes(name),
+  );
   return relevant.length ? relevant.join(", ") : "(none)";
 }
