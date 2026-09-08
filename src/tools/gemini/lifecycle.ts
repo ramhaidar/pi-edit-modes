@@ -311,13 +311,18 @@ export async function calculateGeminiMutation(
       const fixed = await correctFailedReplace(ctx, params, error, latest, signal);
       if (!fixed) throw error;
       if (fixed.noChangesRequired) throw new GeminiEditNoChangeError(fixed.explanation, error);
-      const retry = planSingleReplacement(latest, {
-        file_path: filePath,
-        instruction: String(params.instruction ?? ""),
-        old_string: fixed.oldString,
-        new_string: fixed.newString,
-        allow_multiple: params.allow_multiple === true,
-      });
+      let retry;
+      try {
+        retry = planSingleReplacement(latest, {
+          file_path: filePath,
+          instruction: String(params.instruction ?? ""),
+          old_string: fixed.oldString,
+          new_string: fixed.newString,
+          allow_multiple: params.allow_multiple === true,
+        });
+      } catch {
+        throw error;
+      }
       return {
         toolCallId,
         toolName,

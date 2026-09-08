@@ -129,6 +129,54 @@ test("Gemini replace retries failed matching through utility correction", async 
   }
 });
 
+test("Gemini correction retry failure reports the original edit error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-correct-fallback-"));
+  try {
+    const path = join(cwd, "file.txt");
+    await writeFile(path, "alpha alpha\n", "utf8");
+    const ctx = {
+      cwd,
+      model: { id: "gemini-3-pro" },
+      modelRegistry: {
+        complete: async () => ({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                search: "alpha",
+                replace: "fixed",
+                explanation: "retry with a broader search",
+                noChangesRequired: false,
+              }),
+            },
+          ],
+        }),
+      },
+    };
+    const event = {
+      toolCallId: "correct-fallback",
+      toolName: "replace",
+      input: {
+        file_path: "file.txt",
+        instruction: "Replace the requested text",
+        old_string: "missing original text",
+        new_string: "fixed",
+      },
+    };
+    await assert.rejects(
+      () => handleGeminiToolCall(event, ctx, "auto_edit", false),
+      (error: any) => {
+        assert.match(error?.message ?? "", /Could not find an exact match/);
+        assert.doesNotMatch(error?.message ?? "", /expected 1 occurrence but found 2/i);
+        return true;
+      },
+    );
+    assert.equal(await readFile(path, "utf8"), "alpha alpha\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("Gemini correction noChangesRequired is returned as an upstream-style tool error", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-no-change-"));
   try {
