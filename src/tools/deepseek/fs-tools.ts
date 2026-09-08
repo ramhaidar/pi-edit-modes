@@ -5,6 +5,8 @@ import {
   generateDiffString,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
@@ -119,8 +121,66 @@ function registerDeepSeekRead(pi: ExtensionAPI): void {
     renderCall: (args, theme) => renderCallTitle("read", renderPath(args), theme),
     renderResult: renderTextResult,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const outcome = await getDeepSeekFsRuntime(ctx.cwd).read(params.file_path, params.offset, params.limit, signal);
+      const outcome = await getDeepSeekFsRuntime(ctx).read(params.file_path, params.offset, params.limit, signal);
       return resultText(formatDeepSeekReadOutput(outcome), { target: outcome.path, action: "V" });
+    },
+  });
+}
+
+function detectImageMime(bytes: Uint8Array, path: string): string | undefined {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === "GIF87a") return "image/gif";
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === "GIF89a") return "image/gif";
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return undefined;
+}
+
+async function fencedImagePath(cwd: string, filePath: string): Promise<string> {
+  const workspace = await realpath(cwd);
+  const requested = isAbsolute(filePath) ? resolve(filePath) : resolve(cwd, filePath);
+  const target = await realpath(requested);
+  const rel = relative(workspace, target);
+  if (rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) {
+    throw new Error(`Path '${filePath}' resolves outside the workspace`);
+  }
+  const info = await stat(target);
+  if (!info.isFile()) throw new Error(`Path '${filePath}' is not a file`);
+  return target;
+}
+
+export function registerDeepSeekReadImageTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "read_image",
+    label: "read_image",
+    description: "Read an image file and return it as a model image attachment.",
+    promptSnippet: "Use read_image to inspect image files when image input is available.",
+    parameters: Type.Object({
+      file_path: Type.String({ description: "Path to the image file." }),
+    }, { additionalProperties: false }),
+    executionMode: "parallel",
+    renderCall: (args, theme) => renderCallTitle("read_image", renderPath(args), theme),
+    renderResult: renderTextResult,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted) throw new Error("read_image aborted");
+      const input = (ctx.model as { input?: string[] } | undefined)?.input;
+      if (!Array.isArray(input) || !input.includes("image")) throw new Error("Current model does not support image input");
+      const target = await fencedImagePath(ctx.cwd, params.file_path);
+      const bytes = await readFile(target, signal ? { signal } : undefined);
+      const mimeType = detectImageMime(bytes, target);
+      if (!mimeType) throw new Error(`Unsupported image format for '${params.file_path}'`);
+      return {
+        content: [
+          { type: "text" as const, text: `Image loaded from ${params.file_path}` },
+          { type: "image" as const, data: bytes.toString("base64"), mimeType },
+        ],
+        details: undefined,
+      };
     },
   });
 }
@@ -153,7 +213,7 @@ function registerDeepSeekWrite(pi: ExtensionAPI): void {
     renderResult: (result, options, theme, context) => renderMutationResult("write", result, options, theme, context),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const normalized = normalizeDeepSeekWriteArgs(params as any);
-      const outcome = await getDeepSeekFsRuntime(ctx.cwd).write(normalized.filePath, normalized.content, signal);
+      const outcome = await getDeepSeekFsRuntime(ctx).write(normalized.filePath, normalized.content, signal);
       const diff = outcome.before === null ? generateDiffString("", outcome.after).diff : generateDiffString(outcome.before, outcome.after).diff;
       return resultText(formatDeepSeekWriteOutput(outcome.path, outcome.operation), {
         target: outcome.path,
@@ -201,7 +261,7 @@ function registerDeepSeekEdit(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const normalized = normalizeDeepSeekEditArgs(params as any);
       const replaceAll = normalized.replaceAll;
-      const outcome = await getDeepSeekFsRuntime(ctx.cwd).edit(normalized.filePath, normalized.oldString, normalized.newString, replaceAll, signal);
+      const outcome = await getDeepSeekFsRuntime(ctx).edit(normalized.filePath, normalized.oldString, normalized.newString, replaceAll, signal);
       return resultText(formatDeepSeekEditOutput(outcome.path, replaceAll), {
         target: outcome.path,
         action: "M",
