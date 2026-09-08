@@ -31,6 +31,7 @@ const REPOS = [
   { owner: 'openai', repo: 'codex', branch: 'main', dir: 'codex' },
   { owner: 'google-gemini', repo: 'gemini-cli', branch: 'main', dir: 'gemini-cli' },
   { owner: 'deepseek-ai', repo: 'deepseek-harness', branch: 'master', dir: 'deepseek-harness' },
+  { owner: 'earendil-works', repo: 'pi', branch: 'main', dir: 'pi' },
 ];
 
 const FORCE = process.argv.includes('--force');
