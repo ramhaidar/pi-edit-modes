@@ -1,11 +1,12 @@
-import type { EditModesSettings, ToolMode, ToolSurface } from "./types.ts";
+import type { DeepSeekPreset, EditModesSettings, GeminiApprovalMode, ToolMode, ToolSurface } from "./types.ts";
 
 export const DEFAULT_SETTINGS: EditModesSettings = {
   version: 1,
   defaultMode: "pi",
   surface: "replace",
   autoDiscovery: { enabled: true, gemini: true, codex: true, deepseek: true },
-  gemini: { strictExactMatch: true },
+  gemini: { approval: "ask_user" },
+  deepseek: { preset: "standard" },
 };
 
 export function isToolMode(value: unknown): value is ToolMode {
@@ -14,6 +15,14 @@ export function isToolMode(value: unknown): value is ToolMode {
 
 export function isToolSurface(value: unknown): value is ToolSurface {
   return value === "replace" || value === "additive";
+}
+
+export function isGeminiApprovalMode(value: unknown): value is GeminiApprovalMode {
+  return value === "ask_user" || value === "auto_edit";
+}
+
+export function isDeepSeekPreset(value: unknown): value is DeepSeekPreset {
+  return value === "standard" || value === "minimal";
 }
 
 // Backward-compatible alias.
@@ -38,12 +47,18 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
     const auto = section("autoDiscovery") ?? {};
     const legacyCodex = section("codex") ?? {};
     const gemini = section("gemini") ?? {};
+    const deepseek = section("deepseek") ?? {};
     for (const key of ["enabled", "gemini", "codex", "deepseek"] as const) {
       if (auto[key] !== undefined && typeof auto[key] !== "boolean") return fallback(`autoDiscovery.${key} must be boolean.`);
     }
     if (record.surface !== undefined && !isToolSurface(record.surface)) return fallback(`Invalid surface '${String(record.surface)}'.`);
     if (legacyCodex.surface !== undefined && !isToolSurface(legacyCodex.surface)) return fallback(`Invalid legacy codex.surface '${String(legacyCodex.surface)}'.`);
-    if (gemini.strictExactMatch !== undefined && typeof gemini.strictExactMatch !== "boolean") return fallback("gemini.strictExactMatch must be boolean.");
+    if (gemini.approval !== undefined && !isGeminiApprovalMode(gemini.approval)) return fallback(`Invalid gemini.approval '${String(gemini.approval)}'.`);
+    // v0.1.x exposed strictExactMatch. Accept the legacy boolean so old settings
+    // files continue loading, but intentionally do not project it into the current
+    // Gemini CLI-compatible replacement behavior.
+    if (gemini.strictExactMatch !== undefined && typeof gemini.strictExactMatch !== "boolean") return fallback("legacy gemini.strictExactMatch must be boolean.");
+    if (deepseek.preset !== undefined && !isDeepSeekPreset(deepseek.preset)) return fallback(`Invalid deepseek.preset '${String(deepseek.preset)}'.`);
 
     // v0.1.0 stored the custom-tool surface under codex.surface. Accept it as a migration
     // fallback, but normalize the setting to one universal surface shared by all custom modes.
@@ -65,9 +80,10 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
           deepseek: typeof auto.deepseek === "boolean" ? auto.deepseek : DEFAULT_SETTINGS.autoDiscovery.deepseek,
         },
         gemini: {
-          strictExactMatch: typeof gemini.strictExactMatch === "boolean"
-            ? gemini.strictExactMatch
-            : DEFAULT_SETTINGS.gemini.strictExactMatch,
+          approval: isGeminiApprovalMode(gemini.approval) ? gemini.approval : DEFAULT_SETTINGS.gemini.approval,
+        },
+        deepseek: {
+          preset: isDeepSeekPreset(deepseek.preset) ? deepseek.preset : DEFAULT_SETTINGS.deepseek.preset,
         },
       },
     };

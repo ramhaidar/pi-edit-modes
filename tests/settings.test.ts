@@ -19,6 +19,14 @@ test("valid partial config merges with defaults", () => {
   assert.equal(parsed.settings.autoDiscovery.enabled, true);
   assert.equal(parsed.settings.autoDiscovery.codex, false);
   assert.equal(parsed.settings.autoDiscovery.deepseek, true);
+  assert.equal(parsed.settings.gemini.approval, "ask_user");
+  assert.equal(parsed.settings.deepseek.preset, "standard");
+});
+
+test("legacy gemini.strictExactMatch is accepted but no longer projected", () => {
+  const parsed = parseSettings({ version: 1, gemini: { strictExactMatch: false } });
+  assert.equal(parsed.warning, undefined);
+  assert.deepEqual(parsed.settings.gemini, { approval: "ask_user" });
 });
 
 test("legacy codex.surface migrates to universal surface", () => {
@@ -34,14 +42,16 @@ test("settings store persists JSON and reloads it", async () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.defaultMode = "codex";
     settings.surface = "additive";
-    settings.gemini.strictExactMatch = false;
+    settings.gemini.approval = "auto_edit";
+    settings.deepseek.preset = "minimal";
     await store.save(settings);
     const raw = await readFile(join(dir, "edit-modes.json"), "utf8");
     assert.equal(JSON.parse(raw).defaultMode, "codex");
     assert.equal(JSON.parse(raw).surface, "additive");
     const snap = await store.refresh(true);
     assert.equal(snap.settings.surface, "additive");
-    assert.equal(snap.settings.gemini.strictExactMatch, false);
+    assert.equal(snap.settings.gemini.approval, "auto_edit");
+    assert.equal(snap.settings.deepseek.preset, "minimal");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

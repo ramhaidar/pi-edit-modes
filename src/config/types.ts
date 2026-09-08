@@ -2,6 +2,8 @@ export type ToolMode = "pi" | "codex" | "gemini" | "deepseek";
 export type SessionToolMode = ToolMode | "auto";
 export type ToolSurface = "replace" | "additive";
 export type SessionToolSurface = ToolSurface | "auto";
+export type GeminiApprovalMode = "ask_user" | "auto_edit";
+export type DeepSeekPreset = "standard" | "minimal";
 // Backward-compatible source alias for integrations that imported the old type name.
 export type CodexSurface = ToolSurface;
 
@@ -16,7 +18,10 @@ export interface EditModesSettings {
     deepseek: boolean;
   };
   gemini: {
-    strictExactMatch: boolean;
+    approval: GeminiApprovalMode;
+  };
+  deepseek: {
+    preset: DeepSeekPreset;
   };
 }
 

@@ -13,7 +13,9 @@ const SESSION_MODES: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek",
 const SESSION_SURFACES: SessionToolSurface[] = ["auto", "replace", "additive"];
 const DEFAULT_MODES: EditModesSettings["defaultMode"][] = ["pi", "gemini", "codex", "deepseek"];
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
-const SAVE_ROW = 9;
+const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
+const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
+const SAVE_ROW = 10;
 
 function cycle<T>(values: readonly T[], current: T, direction: -1 | 1): T {
   const index = Math.max(0, values.indexOf(current));
@@ -68,7 +70,8 @@ export class SettingsDialog {
       { label: "Auto detect Gemini", value: this.draft.settings.autoDiscovery.gemini ? "On" : "Off" },
       { label: "Auto detect Codex", value: this.draft.settings.autoDiscovery.codex ? "On" : "Off" },
       { label: "Auto detect DeepSeek", value: this.draft.settings.autoDiscovery.deepseek ? "On" : "Off" },
-      { label: "Gemini strict exact match", value: this.draft.settings.gemini.strictExactMatch ? "On" : "Off" },
+      { label: "Gemini mutation approval", value: this.draft.settings.gemini.approval },
+      { label: "DeepSeek preset", value: this.draft.settings.deepseek.preset },
       { label: "Save settings", value: "" },
     ];
   }
@@ -83,7 +86,8 @@ export class SettingsDialog {
       case 5: this.draft.settings.autoDiscovery.gemini = !this.draft.settings.autoDiscovery.gemini; break;
       case 6: this.draft.settings.autoDiscovery.codex = !this.draft.settings.autoDiscovery.codex; break;
       case 7: this.draft.settings.autoDiscovery.deepseek = !this.draft.settings.autoDiscovery.deepseek; break;
-      case 8: this.draft.settings.gemini.strictExactMatch = !this.draft.settings.gemini.strictExactMatch; break;
+      case 8: this.draft.settings.gemini.approval = cycle(GEMINI_APPROVALS, this.draft.settings.gemini.approval, direction); break;
+      case 9: this.draft.settings.deepseek.preset = cycle(DEEPSEEK_PRESETS, this.draft.settings.deepseek.preset, direction); break;
       case SAVE_ROW: this.done({ action: "save", draft: cloneDraft(this.draft) }); return;
     }
     this.requestRender();
