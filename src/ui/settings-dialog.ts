@@ -17,6 +17,21 @@ const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user",
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
 const SAVE_ROW = 11;
 
+const ROW_DESCRIPTIONS: readonly string[] = [
+  "Tool mode for this session only ('auto' follows the active model). Session-only: it does not change saved settings.",
+  "Session-only tool surface: 'replace' swaps Pi's built-in edit tools for the mode's tools, 'additive' keeps both.",
+  "Mode used for new sessions when no model-specific rule matches. Written to edit-modes.json on save.",
+  "Default surface for new sessions. A session surface override still wins while a session is running.",
+  "Master switch for model auto-detection. When Off, none of the individual auto-detect rules below apply.",
+  "Automatically use Gemini tools whenever the active model is a Gemini model.",
+  "Automatically use Codex tools whenever the active model is a Codex/GPT model.",
+  "Automatically use DeepSeek tools whenever the active model is a DeepSeek model.",
+  "'ask_user' asks for confirmation before Gemini edits or writes files; 'auto_edit' lets Gemini apply changes without asking.",
+  "When On, Gemini can retry failed file edits on its own. Turn Off to fail fast instead of auto-correcting.",
+  "DeepSeek tool/prompt profile: 'standard' is the full setup, 'minimal' is a lighter, lower-token setup.",
+  "Write all changed values to edit-modes.json and close this dialog. Esc closes without saving.",
+];
+
 function cycle<T>(values: readonly T[], current: T, direction: -1 | 1): T {
   const index = Math.max(0, values.indexOf(current));
   return values[(index + direction + values.length) % values.length]!;
@@ -28,6 +43,22 @@ function cloneDraft(draft: SettingsDialogDraft): SettingsDialogDraft {
     sessionSurface: draft.sessionSurface,
     settings: structuredClone(draft.settings),
   };
+}
+
+function wrapText(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const word of text.split(/\s+/)) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && candidate.length > width) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length > 0 ? lines : [""];
 }
 
 export class SettingsDialog {
@@ -88,6 +119,10 @@ export class SettingsDialog {
       { label: "DeepSeek preset", value: this.draft.settings.deepseek.preset },
       { label: "Save settings", value: "" },
     ];
+  }
+
+  private describe(row: number): string {
+    return ROW_DESCRIPTIONS[row] ?? "↑/↓ select a row to see what it does.";
   }
 
   private change(direction: -1 | 1): void {
@@ -190,13 +225,16 @@ export class SettingsDialog {
     if (this.effectiveReason) add(`Reason: ${this.effectiveReason}`);
     add();
     rows.forEach((row, index) => {
-      const prefix = index === this.selected ? ">" : " ";
+      const selected = index === this.selected;
+      const prefix = selected ? ">" : " ";
       const value = row.value ? ` ${row.value}` : "";
       const labelWidth = Math.max(10, inner - visibleWidth(value) - 4);
       const label = truncateToWidth(row.label, labelWidth, "...", true).padEnd(labelWidth);
-      add(`${prefix} ${label}${value}`);
+      add(`${prefix} ${selected ? this.theme.fg("accent", label) : label}${value}`);
     });
     add();
+    for (const line of wrapText(this.describe(this.selected), inner - 2))
+      add(this.theme.fg("dim", line));
     add("↑/↓ Navigate   ←/→ Change   Enter Select   Esc Close");
     lines.push(this.theme.fg("border", `╰${"─".repeat(inner)}╯`));
     return lines;

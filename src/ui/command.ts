@@ -33,6 +33,6 @@ export async function openSettingsDialog(input: {
         done,
         () => tui.requestRender(),
       ),
-    { overlay: true, overlayOptions: { anchor: "center", width: 64, maxHeight: 24 } },
+    { overlay: true, overlayOptions: { anchor: "center", width: 64, maxHeight: 26 } },
   );
 }
