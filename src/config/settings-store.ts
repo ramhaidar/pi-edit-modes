@@ -26,11 +26,17 @@ export class EditModesConfigStore {
     this.modelsPath = join(agentDir, "models.json");
   }
 
-  snapshot(): StoreSnapshot { return this.snapshotValue; }
+  snapshot(): StoreSnapshot {
+    return this.snapshotValue;
+  }
 
   async refresh(force = false): Promise<StoreSnapshot> {
-    const [settingsMtime, modelsMtime] = await Promise.all([fileMtimeMs(this.settingsPath), fileMtimeMs(this.modelsPath)]);
-    if (!force && settingsMtime === this.settingsMtime && modelsMtime === this.modelsMtime) return this.snapshotValue;
+    const [settingsMtime, modelsMtime] = await Promise.all([
+      fileMtimeMs(this.settingsPath),
+      fileMtimeMs(this.modelsPath),
+    ]);
+    if (!force && settingsMtime === this.settingsMtime && modelsMtime === this.modelsMtime)
+      return this.snapshotValue;
     this.settingsMtime = settingsMtime;
     this.modelsMtime = modelsMtime;
     const warnings: string[] = [];
@@ -41,7 +47,9 @@ export class EditModesConfigStore {
         settings = parsed.settings;
         if (parsed.warning) warnings.push(parsed.warning);
       } catch (error) {
-        warnings.push(`Invalid edit-modes.json: ${error instanceof Error ? error.message : String(error)}. Using defaults.`);
+        warnings.push(
+          `Invalid edit-modes.json: ${error instanceof Error ? error.message : String(error)}. Using defaults.`,
+        );
       }
     }
     const modelResult = await readModelOverrides(this.modelsPath);
@@ -56,10 +64,18 @@ export class EditModesConfigStore {
     const payload = `${JSON.stringify(settings, null, 2)}\n`;
     await writeFile(temp, payload, { encoding: "utf8", mode: 0o600 });
     const handle = await open(temp, "r+");
-    try { await handle.sync(); } finally { await handle.close(); }
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await rename(temp, this.settingsPath);
     const dir = await open(dirname(this.settingsPath), "r").catch(() => undefined);
-    try { await dir?.sync().catch(() => undefined); } finally { await dir?.close().catch(() => undefined); }
+    try {
+      await dir?.sync().catch(() => undefined);
+    } finally {
+      await dir?.close().catch(() => undefined);
+    }
     await this.refresh(true);
   }
 }

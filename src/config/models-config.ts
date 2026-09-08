@@ -28,10 +28,14 @@ export function parseModelOverrides(value: unknown): ParsedModelOverrides {
   const warnings: string[] = [];
   if (!value || typeof value !== "object" || Array.isArray(value)) return { overrides, warnings };
   const providers = (value as Record<string, unknown>).providers;
-  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return { overrides, warnings };
+  if (!providers || typeof providers !== "object" || Array.isArray(providers))
+    return { overrides, warnings };
 
-  for (const [providerName, providerValue] of Object.entries(providers as Record<string, unknown>)) {
-    if (!providerValue || typeof providerValue !== "object" || Array.isArray(providerValue)) continue;
+  for (const [providerName, providerValue] of Object.entries(
+    providers as Record<string, unknown>,
+  )) {
+    if (!providerValue || typeof providerValue !== "object" || Array.isArray(providerValue))
+      continue;
     const provider = providerValue as Record<string, unknown>;
     if (Array.isArray(provider.models)) {
       for (const modelValue of provider.models) {
@@ -41,19 +45,30 @@ export function parseModelOverrides(value: unknown): ParsedModelOverrides {
         const rawMode = model["x-pi-tool-mode"];
         if (rawMode === undefined) continue;
         if (!isToolMode(rawMode)) {
-          warnings.push(`Invalid x-pi-tool-mode '${String(rawMode)}' for ${providerName}/${id ?? "(unknown)"}; ignoring override.`);
+          warnings.push(
+            `Invalid x-pi-tool-mode '${String(rawMode)}' for ${providerName}/${id ?? "(unknown)"}; ignoring override.`,
+          );
           continue;
         }
         overrides.set(providerName, id, rawMode);
       }
     }
-    if (provider.modelOverrides && typeof provider.modelOverrides === "object" && !Array.isArray(provider.modelOverrides)) {
-      for (const [modelId, overrideValue] of Object.entries(provider.modelOverrides as Record<string, unknown>)) {
-        if (!overrideValue || typeof overrideValue !== "object" || Array.isArray(overrideValue)) continue;
+    if (
+      provider.modelOverrides &&
+      typeof provider.modelOverrides === "object" &&
+      !Array.isArray(provider.modelOverrides)
+    ) {
+      for (const [modelId, overrideValue] of Object.entries(
+        provider.modelOverrides as Record<string, unknown>,
+      )) {
+        if (!overrideValue || typeof overrideValue !== "object" || Array.isArray(overrideValue))
+          continue;
         const rawMode = (overrideValue as Record<string, unknown>)["x-pi-tool-mode"];
         if (rawMode === undefined) continue;
         if (!isToolMode(rawMode)) {
-          warnings.push(`Invalid x-pi-tool-mode '${String(rawMode)}' for ${providerName}/${modelId}; ignoring override.`);
+          warnings.push(
+            `Invalid x-pi-tool-mode '${String(rawMode)}' for ${providerName}/${modelId}; ignoring override.`,
+          );
           continue;
         }
         overrides.set(providerName, modelId, rawMode);
@@ -146,11 +161,17 @@ export async function readModelOverrides(path: string): Promise<ParsedModelOverr
     if (code === "ENOENT") return { overrides: new MutableModelOverrideMap(), warnings: [] };
     return {
       overrides: new MutableModelOverrideMap(),
-      warnings: [`Unable to read models.json overrides: ${error instanceof Error ? error.message : String(error)}`],
+      warnings: [
+        `Unable to read models.json overrides: ${error instanceof Error ? error.message : String(error)}`,
+      ],
     };
   }
 }
 
 export async function fileMtimeMs(path: string): Promise<number> {
-  try { return (await stat(path)).mtimeMs; } catch { return -1; }
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return -1;
+  }
 }

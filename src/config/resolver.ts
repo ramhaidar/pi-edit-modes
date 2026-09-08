@@ -1,4 +1,10 @@
-import type { EditModesSettings, ModelIdentity, ModelOverrideMap, ModeResolution, SessionToolMode } from "./types.ts";
+import type {
+  EditModesSettings,
+  ModelIdentity,
+  ModelOverrideMap,
+  ModeResolution,
+  SessionToolMode,
+} from "./types.ts";
 
 function corpus(model: ModelIdentity): string {
   return [model.provider, model.id, model.name].filter(Boolean).join(" ").toLowerCase();
@@ -25,17 +31,29 @@ export function resolveMode(input: {
   const text = corpus(model);
   if (settings.autoDiscovery.enabled) {
     if (settings.autoDiscovery.gemini && containsToken(text, "gemini")) {
-      return { mode: "gemini", source: "auto-gemini", matchedBy: "provider/id/name contains gemini token" };
+      return {
+        mode: "gemini",
+        source: "auto-gemini",
+        matchedBy: "provider/id/name contains gemini token",
+      };
     }
     if (settings.autoDiscovery.deepseek && containsToken(text, "deepseek")) {
-      return { mode: "deepseek", source: "auto-deepseek", matchedBy: "provider/id/name contains deepseek token" };
+      return {
+        mode: "deepseek",
+        source: "auto-deepseek",
+        matchedBy: "provider/id/name contains deepseek token",
+      };
     }
     const provider = model.provider?.trim().toLowerCase();
     if (settings.autoDiscovery.codex && provider === "openai-codex") {
       return { mode: "codex", source: "auto-codex", matchedBy: "provider is openai-codex" };
     }
     if (settings.autoDiscovery.codex && containsToken(text, "codex")) {
-      return { mode: "codex", source: "auto-codex", matchedBy: "provider/id/name contains codex token" };
+      return {
+        mode: "codex",
+        source: "auto-codex",
+        matchedBy: "provider/id/name contains codex token",
+      };
     }
   }
   return { mode: settings.defaultMode, source: "default", matchedBy: "defaultMode" };

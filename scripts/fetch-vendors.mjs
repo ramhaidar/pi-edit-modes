@@ -7,42 +7,34 @@
 //   node scripts/fetch-vendors.mjs          # download/update as needed
 //   node scripts/fetch-vendors.mjs --force  # re-download even if SHA matches
 
-import { createWriteStream, readFileSync } from 'node:fs';
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { inflateRawSync } from 'node:zlib';
+import { createWriteStream, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const VENDOR_DIR = path.join(ROOT, 'vendor');
-const STATE_FILE = path.join(VENDOR_DIR, '.state.json');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const VENDOR_DIR = path.join(ROOT, "vendor");
+const STATE_FILE = path.join(VENDOR_DIR, ".state.json");
 
 const REPOS = [
-  { owner: 'openai', repo: 'codex', branch: 'main', dir: 'codex' },
-  { owner: 'google-gemini', repo: 'gemini-cli', branch: 'main', dir: 'gemini-cli' },
-  { owner: 'deepseek-ai', repo: 'deepseek-harness', branch: 'master', dir: 'deepseek-harness' },
-  { owner: 'earendil-works', repo: 'pi', branch: 'main', dir: 'pi' },
+  { owner: "openai", repo: "codex", branch: "main", dir: "codex" },
+  { owner: "google-gemini", repo: "gemini-cli", branch: "main", dir: "gemini-cli" },
+  { owner: "deepseek-ai", repo: "deepseek-harness", branch: "master", dir: "deepseek-harness" },
+  { owner: "earendil-works", repo: "pi", branch: "main", dir: "pi" },
 ];
 
-const FORCE = process.argv.includes('--force');
-const USER_AGENT = 'pi-edit-modes-vendor-fetch';
+const FORCE = process.argv.includes("--force");
+const USER_AGENT = "pi-edit-modes-vendor-fetch";
 
 const log = (msg) => console.log(`[fetch-vendors] ${msg}`);
 
 async function fetchJson(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/vnd.github+json' },
-    redirect: 'follow',
+    headers: { "User-Agent": USER_AGENT, Accept: "application/vnd.github+json" },
+    redirect: "follow",
   });
   if (!res.ok) {
     if (res.status === 403) {
@@ -54,17 +46,15 @@ async function fetchJson(url) {
 }
 
 async function latestBranchSha({ owner, repo, branch }) {
-  const commit = await fetchJson(
-    `https://api.github.com/repos/${owner}/${repo}/commits/${branch}`,
-  );
+  const commit = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/commits/${branch}`);
   return commit.sha;
 }
 
 async function downloadZip({ owner, repo, branch }, dest) {
   const url = `https://github.com/${owner}/${repo}/archive/refs/heads/${branch}.zip`;
   const res = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT },
-    redirect: 'follow',
+    headers: { "User-Agent": USER_AGENT },
+    redirect: "follow",
   });
   if (!res.ok) {
     throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
@@ -100,7 +90,7 @@ async function unzip(zipPath, outDir) {
     const extraLen = buf.readUInt16LE(ptr + 30);
     const commentLen = buf.readUInt16LE(ptr + 32);
     const localOffset = buf.readUInt32LE(ptr + 42);
-    const name = buf.toString('utf8', ptr + 46, ptr + 46 + nameLen);
+    const name = buf.toString("utf8", ptr + 46, ptr + 46 + nameLen);
     ptr += 46 + nameLen + extraLen + commentLen;
 
     // The local header's own name/extra lengths decide where data starts
@@ -112,7 +102,7 @@ async function unzip(zipPath, outDir) {
     const lExtraLen = buf.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + lNameLen + lExtraLen;
 
-    const isDir = name.endsWith('/');
+    const isDir = name.endsWith("/");
     const abs = path.resolve(outDir, name);
     if (abs !== outDir && !abs.startsWith(outDir + path.sep)) {
       throw new Error(`${zipPath}: refusing unsafe zip entry ${name}`);
@@ -147,7 +137,7 @@ async function dirExistsAndNonEmpty(dir) {
 
 async function readState() {
   try {
-    return JSON.parse(await readFile(STATE_FILE, 'utf8'));
+    return JSON.parse(await readFile(STATE_FILE, "utf8"));
   } catch {
     return { repos: {} };
   }
@@ -155,8 +145,8 @@ async function readState() {
 
 async function writeState(state) {
   await mkdir(VENDOR_DIR, { recursive: true });
-  const tmp = STATE_FILE + '.tmp';
-  await writeFile(tmp, JSON.stringify(state, null, 2) + '\n');
+  const tmp = STATE_FILE + ".tmp";
+  await writeFile(tmp, JSON.stringify(state, null, 2) + "\n");
   await rename(tmp, STATE_FILE);
 }
 
@@ -167,11 +157,7 @@ async function fetchRepo(repo, state) {
 
   const sha = await latestBranchSha(repo);
 
-  if (
-    !FORCE &&
-    known?.sha === sha &&
-    (await dirExistsAndNonEmpty(target))
-  ) {
+  if (!FORCE && known?.sha === sha && (await dirExistsAndNonEmpty(target))) {
     log(`${label}: up to date at ${sha.slice(0, 12)} — skipping`);
     return;
   }
@@ -191,7 +177,7 @@ async function fetchRepo(repo, state) {
     await unzip(zipPath, staging);
     const entries = await readdir(staging);
     if (entries.length !== 1) {
-      throw new Error(`${label}: expected one top-level dir in zip, got ${entries.join(', ')}`);
+      throw new Error(`${label}: expected one top-level dir in zip, got ${entries.join(", ")}`);
     }
     await rm(target, { recursive: true, force: true });
     await rename(path.join(staging, entries[0]), target);

@@ -4,7 +4,13 @@ import { resolveMode } from "../src/config/resolver.ts";
 import { DEFAULT_SETTINGS } from "../src/config/schema.ts";
 import { MutableModelOverrideMap, parseModelOverrides } from "../src/config/models-config.ts";
 
-function resolve(provider: string, id: string, settings = structuredClone(DEFAULT_SETTINGS), overrides = new MutableModelOverrideMap(), sessionOverride: any = "auto") {
+function resolve(
+  provider: string,
+  id: string,
+  settings = structuredClone(DEFAULT_SETTINGS),
+  overrides = new MutableModelOverrideMap(),
+  sessionOverride: any = "auto",
+) {
   return resolveMode({ model: { provider, id }, settings, overrides, sessionOverride });
 }
 
@@ -39,7 +45,10 @@ test("explicit model override wins over detection", () => {
 test("session override wins over explicit model override", () => {
   const overrides = new MutableModelOverrideMap();
   overrides.set("google", "gemini-3-pro", "pi");
-  assert.equal(resolve("google", "gemini-3-pro", structuredClone(DEFAULT_SETTINGS), overrides, "codex").mode, "codex");
+  assert.equal(
+    resolve("google", "gemini-3-pro", structuredClone(DEFAULT_SETTINGS), overrides, "codex").mode,
+    "codex",
+  );
 });
 
 test("auto discovery can be disabled", () => {
@@ -64,17 +73,21 @@ test("individual detection families can be disabled", () => {
 });
 
 test("parses custom model and modelOverrides metadata", () => {
-  const parsed = parseModelOverrides({ providers: {
-    proxy: { models: [{ id: "m1", "x-pi-tool-mode": "gemini" }] },
-    openai: { modelOverrides: { "gpt-5.4": { "x-pi-tool-mode": "pi" } } },
-  } });
+  const parsed = parseModelOverrides({
+    providers: {
+      proxy: { models: [{ id: "m1", "x-pi-tool-mode": "gemini" }] },
+      openai: { modelOverrides: { "gpt-5.4": { "x-pi-tool-mode": "pi" } } },
+    },
+  });
   assert.equal(parsed.overrides.get("proxy", "m1"), "gemini");
   assert.equal(parsed.overrides.get("openai", "gpt-5.4"), "pi");
   assert.deepEqual(parsed.warnings, []);
 });
 
 test("invalid model override is ignored with warning", () => {
-  const parsed = parseModelOverrides({ providers: { x: { models: [{ id: "m", "x-pi-tool-mode": "wat" }] } } });
+  const parsed = parseModelOverrides({
+    providers: { x: { models: [{ id: "m", "x-pi-tool-mode": "wat" }] } },
+  });
   assert.equal(parsed.overrides.get("x", "m"), undefined);
   assert.equal(parsed.warnings.length, 1);
 });

@@ -1,0 +1,12 @@
+# Dependencies and generated content
+node_modules/
+vendor/
+
+# Preserved upstream baseline (tab-indented, deliberately untouched)
+src/tools/codex/engine.ts
+
+# Package manager files
+pnpm-lock.yaml
+
+# Never reformat .pi state
+.pi/

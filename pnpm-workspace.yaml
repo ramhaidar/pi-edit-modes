@@ -1,4 +1,4 @@
 allowBuilds:
-  '@google/genai': true
+  "@google/genai": true
   koffi: true
   protobufjs: true

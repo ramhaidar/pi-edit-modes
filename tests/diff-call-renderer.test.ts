@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DiffCallRenderComponent, displayToolPath, firstText, scanApplyPatchPreviewTargets } from "../src/tools/diff-call-renderer.ts";
+import {
+  DiffCallRenderComponent,
+  displayToolPath,
+  firstText,
+  scanApplyPatchPreviewTargets,
+} from "../src/tools/diff-call-renderer.ts";
 
 test("diff call renderer exposes result and diff as call-body rows", () => {
   const component = new DiffCallRenderComponent();
@@ -51,14 +56,21 @@ test("compact file headers include action and workspace-root path", async () => 
   assert.equal(displayToolPath("./src/index.ts"), "/src/index.ts");
   assert.equal(displayToolPath("/repo/index.php"), "/repo/index.php");
   assert.equal(compactFileHeader("apply_patch", "A", "index.php"), "apply_patch A /index.php");
-  assert.equal(compactFileHeader("replace_file_content", "M", "src/index.ts"), "replace_file_content M /src/index.ts");
-  assert.equal(compactFileHeader("str_replace_editor", "M", "/repo/a.ts"), "str_replace_editor M /repo/a.ts");
+  assert.equal(
+    compactFileHeader("replace_file_content", "M", "src/index.ts"),
+    "replace_file_content M /src/index.ts",
+  );
+  assert.equal(
+    compactFileHeader("str_replace_editor", "M", "/repo/a.ts"),
+    "str_replace_editor M /repo/a.ts",
+  );
 });
-
 
 test("apply_patch preview scan sees an unterminated streamed file header", () => {
   assert.deepEqual(
-    scanApplyPatchPreviewTargets("*** Begin Patch\n*** Update File: D:\\GitHub\\LMP\\routes\\web.php"),
+    scanApplyPatchPreviewTargets(
+      "*** Begin Patch\n*** Update File: D:\\GitHub\\LMP\\routes\\web.php",
+    ),
     [{ action: "M", path: "D:\\GitHub\\LMP\\routes\\web.php" }],
   );
 });
@@ -95,7 +107,7 @@ test("diff call renderer truncates every row to the supplied terminal width", as
   component.updateHeader("edit /very/long/path/that/exceeds/the/terminal/width.ts");
   component.updateResult(
     "a very long status message that cannot fit on a narrow terminal",
-    "+class=\"w-full rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs focus:ring-sky-500\"",
+    '+class="w-full rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs focus:ring-sky-500"',
   );
 
   const rows = component.render(32);
@@ -103,11 +115,13 @@ test("diff call renderer truncates every row to the supplied terminal width", as
   assert.ok(rows.every((row) => visibleWidth(row) <= 32));
 });
 
-
 test("diff call renderer splits multiline result text into physical rows", () => {
   const component = new DiffCallRenderComponent();
   component.updateHeader("write A D:\\repo\\a.php");
-  component.updateResult("<path>D:\\repo\\a.php</path>\n<type>file</type>\n<content>\nCreated file\n</content>", undefined);
+  component.updateResult(
+    "<path>D:\\repo\\a.php</path>\n<type>file</type>\n<content>\nCreated file\n</content>",
+    undefined,
+  );
 
   const rows = component.render(120);
   assert.deepEqual(rows, [

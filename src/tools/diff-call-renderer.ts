@@ -1,6 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-
 export type CompactFileAction = "A" | "M" | "D" | "V";
 
 /**
@@ -17,10 +16,13 @@ export function displayToolPath(target: unknown): string {
   return `/${relative}`;
 }
 
-export function compactFileHeader(toolName: string, action: CompactFileAction, target: string): string {
+export function compactFileHeader(
+  toolName: string,
+  action: CompactFileAction,
+  target: string,
+): string {
   return `${toolName} ${action} ${displayToolPath(target)}`;
 }
-
 
 export type ApplyPatchPreviewTarget = {
   action: "A" | "M" | "D";
@@ -115,7 +117,9 @@ export class DiffCallRenderComponent {
       for (const row of normalizedDiffRows(this.diff)) output.push(`    ${row}`);
     }
     if (width <= 0) return output;
-    return output.map((row) => visibleWidth(row) > width ? truncateToWidth(row, width, "...") : row);
+    return output.map((row) =>
+      visibleWidth(row) > width ? truncateToWidth(row, width, "...") : row,
+    );
   }
 
   invalidate(): void {
@@ -123,6 +127,8 @@ export class DiffCallRenderComponent {
   }
 }
 
-export function firstText(result: { content?: Array<{ type?: string; text?: string }> }): string | undefined {
+export function firstText(result: {
+  content?: Array<{ type?: string; text?: string }>;
+}): string | undefined {
   return result.content?.find((item) => item?.type === "text")?.text;
 }
