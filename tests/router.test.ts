@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { computeToolTransition, initialToolOwnership } from "../src/modes/router.ts";
 
-const all = new Set(["read", "edit", "write", "apply_patch", "replace_file_content", "multi_replace_file_content", "write_to_file", "str_replace_editor"]);
+const all = new Set(["read", "read_image", "edit", "write", "apply_patch", "replace", "write_file", "str_replace_editor"]);
 
 function step(
   activeTools: string[],
@@ -11,110 +11,124 @@ function step(
   surface: "replace" | "additive" = "replace",
   codexSupported = true,
   availableTools = all,
+  deepseekPreset: "standard" | "minimal" = "standard",
+  deepseekImageSupported = false,
 ) {
-  return computeToolTransition({ activeTools, desiredMode, ownership, surface, codexSupported, availableTools });
+  return computeToolTransition({
+    activeTools,
+    desiredMode,
+    ownership,
+    surface,
+    codexSupported,
+    availableTools,
+    deepseekPreset,
+    deepseekImageSupported,
+  });
 }
 
-test("pi -> codex replace removes native tools and activates apply_patch", () => {
-  const r = step(["read", "edit", "write"], "codex");
-  assert.deepEqual(r.nextTools, ["read", "apply_patch"]);
-  assert.equal(r.nextOwnership.editRemovedByUs, true);
-  assert.equal(r.nextOwnership.writeRemovedByUs, true);
-  assert.equal(r.surface, "codex-replace");
+test("pi -> codex replace removes edit/write and activates apply_patch", () => {
+  const result = step(["read", "edit", "write"], "codex");
+  assert.deepEqual(result.nextTools, ["read", "apply_patch"]);
+  assert.equal(result.nextOwnership.editRemovedByUs, true);
+  assert.equal(result.nextOwnership.writeRemovedByUs, true);
+  assert.equal(result.surface, "codex-replace");
 });
 
-test("codex replace -> gemini replace is one suppression transition", () => {
-  const c = step(["read", "edit", "write"], "codex");
-  const g = step(c.nextTools, "gemini", c.nextOwnership);
-  assert.equal(g.nextTools.includes("edit"), false);
-  assert.equal(g.nextTools.includes("write"), false);
-  assert.equal(g.nextTools.includes("apply_patch"), false);
-  assert.deepEqual(g.nextTools.filter((x) => x.includes("file_content") || x === "write_to_file"), ["replace_file_content", "multi_replace_file_content", "write_to_file"]);
-  assert.equal(g.surface, "gemini-replace");
+test("codex replace -> gemini replace keeps native edit/write suppressed", () => {
+  const codex = step(["read", "edit", "write"], "codex");
+  const gemini = step(codex.nextTools, "gemini", codex.nextOwnership);
+  assert.deepEqual(gemini.nextTools, ["read", "replace", "write_file"]);
+  assert.equal(gemini.surface, "gemini-replace");
 });
 
-test("gemini replace -> pi restores only owned native tools", () => {
-  const g = step(["read", "edit", "write"], "gemini");
-  const p = step(g.nextTools, "pi", g.nextOwnership);
-  assert.deepEqual(p.nextTools, ["read", "edit", "write"]);
+test("gemini replace exposes only current Gemini editing vocabulary", () => {
+  const result = step(["read", "edit", "write", "replace_file_content", "multi_replace_file_content", "write_to_file"], "gemini");
+  assert.deepEqual(result.nextTools, ["read", "replace", "write_file"]);
 });
 
-test("external native activation relinquishes ownership and is not fought", () => {
-  const c = step(["read", "edit", "write"], "codex");
-  const externallyActivated = [...c.nextTools, "edit"];
-  const repeated = step(externallyActivated, "codex", c.nextOwnership);
-  assert.equal(repeated.nextTools.includes("edit"), true);
-  assert.equal(repeated.nextOwnership.editRemovedByUs, false);
-  const again = step(repeated.nextTools, "codex", repeated.nextOwnership);
-  assert.equal(again.nextTools.includes("edit"), true);
+test("strict replace surface removes externally reactivated native tools again", () => {
+  const first = step(["read", "edit", "write"], "gemini");
+  const repeated = step([...first.nextTools, "edit"], "gemini", first.nextOwnership);
+  assert.equal(repeated.nextTools.includes("edit"), false);
+  assert.equal(repeated.nextOwnership.editRemovedByUs, true);
 });
 
-test("codex additive keeps native tools", () => {
-  const r = step(["read", "edit", "write"], "codex", initialToolOwnership(), "additive");
-  assert.deepEqual(r.nextTools, ["read", "edit", "write", "apply_patch"]);
-  assert.equal(r.surface, "codex-additive");
+test("gemini replace -> pi restores owned native tools", () => {
+  const gemini = step(["read", "edit", "write"], "gemini");
+  const pi = step(gemini.nextTools, "pi", gemini.nextOwnership);
+  assert.deepEqual(pi.nextTools, ["read", "edit", "write"]);
 });
 
-test("gemini additive keeps native tools", () => {
-  const r = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "additive");
-  assert.deepEqual(r.nextTools, ["read", "edit", "write", "replace_file_content", "multi_replace_file_content", "write_to_file"]);
-  assert.equal(r.surface, "gemini-additive");
+test("additive surfaces are hybrids and retain native tools", () => {
+  const codex = step(["read", "edit", "write"], "codex", initialToolOwnership(), "additive");
+  assert.deepEqual(codex.nextTools, ["read", "edit", "write", "apply_patch"]);
+  const gemini = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "additive");
+  assert.deepEqual(gemini.nextTools, ["read", "edit", "write", "replace", "write_file"]);
 });
 
-test("replace -> additive restores owned native tools without changing custom mode", () => {
-  const replace = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "replace");
-  const additive = step(replace.nextTools, "gemini", replace.nextOwnership, "additive");
-  assert.equal(additive.nextTools.includes("edit"), true);
-  assert.equal(additive.nextTools.includes("write"), true);
-  assert.equal(additive.nextTools.includes("replace_file_content"), true);
+test("replace -> additive restores owned native tools without losing Gemini tools", () => {
+  const strict = step(["read", "edit", "write"], "gemini");
+  const additive = step(strict.nextTools, "gemini", strict.nextOwnership, "additive");
+  assert.deepEqual(additive.nextTools, ["read", "edit", "write", "replace", "write_file"]);
   assert.equal(additive.nextOwnership.suppressesNative, false);
 });
 
-test("unavailable codex restores native tools", () => {
-  const c = step(["read", "edit", "write"], "codex");
-  const unavailable = step(c.nextTools, "codex", c.nextOwnership, "replace", false);
-  assert.deepEqual(unavailable.nextTools, ["read", "edit", "write"]);
-  assert.equal(unavailable.surface, "codex-unavailable");
-});
-
 test("excluded Gemini tool is not resurrected", () => {
-  const available = new Set([...all].filter((name) => name !== "write_to_file"));
-  const g = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "replace", true, available);
-  assert.equal(g.nextTools.includes("write_to_file"), false);
-  assert.equal(g.nextTools.includes("replace_file_content"), true);
+  const available = new Set([...all].filter((name) => name !== "write_file"));
+  const result = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "replace", true, available);
+  assert.equal(result.nextTools.includes("write_file"), false);
+  assert.equal(result.nextTools.includes("replace"), true);
 });
 
 test("all Gemini tools excluded falls back to native tools", () => {
   const available = new Set(["read", "edit", "write", "apply_patch"]);
-  const g = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "replace", true, available);
-  assert.deepEqual(g.nextTools, ["read", "edit", "write"]);
-  assert.equal(g.surface, "gemini-unavailable");
+  const result = step(["read", "edit", "write"], "gemini", initialToolOwnership(), "replace", true, available);
+  assert.deepEqual(result.nextTools, ["read", "edit", "write"]);
+  assert.equal(result.surface, "gemini-unavailable");
 });
 
-
-test("deepseek replace keeps write/edit and activates str_replace_editor", () => {
-  const r = step(["read", "edit", "write"], "deepseek");
-  assert.deepEqual(r.nextTools, ["read", "edit", "write", "str_replace_editor"]);
-  assert.equal(r.nextOwnership.suppressesNative, false);
-  assert.equal(r.surface, "deepseek-replace");
+test("DeepSeek standard replace exposes read/write/edit without str_replace_editor", () => {
+  const result = step(["read", "edit", "write"], "deepseek");
+  assert.deepEqual(result.nextTools, ["read", "edit", "write"]);
+  assert.equal(result.nextOwnership.suppressesNative, false);
+  assert.equal(result.surface, "deepseek-replace");
 });
 
-test("codex replace -> deepseek replace restores native write/edit", () => {
+test("DeepSeek standard conditionally exposes read_image for vision models", () => {
+  const result = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "replace", true, all, "standard", true);
+  assert.deepEqual(result.nextTools, ["read", "edit", "write", "read_image"]);
+});
+
+test("DeepSeek minimal replace exposes str_replace_editor and suppresses native filesystem family", () => {
+  const result = step(["read", "edit", "write", "bash"], "deepseek", initialToolOwnership(), "replace", true, all, "minimal");
+  assert.deepEqual(result.nextTools, ["bash", "str_replace_editor"]);
+  assert.equal(result.nextOwnership.readRemovedByUs, true);
+  assert.equal(result.nextOwnership.editRemovedByUs, true);
+  assert.equal(result.nextOwnership.writeRemovedByUs, true);
+});
+
+test("Codex replace -> DeepSeek minimal also suppresses read", () => {
   const codex = step(["read", "edit", "write"], "codex");
-  const deepseek = step(codex.nextTools, "deepseek", codex.nextOwnership, "replace");
-  assert.deepEqual(deepseek.nextTools, ["read", "edit", "write", "str_replace_editor"]);
-  assert.equal(deepseek.nextOwnership.suppressesNative, false);
+  const minimal = step(codex.nextTools, "deepseek", codex.nextOwnership, "replace", true, all, "minimal");
+  assert.deepEqual(minimal.nextTools, ["str_replace_editor"]);
 });
 
-test("deepseek additive also keeps native tools", () => {
-  const r = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "additive");
-  assert.deepEqual(r.nextTools, ["read", "edit", "write", "str_replace_editor"]);
-  assert.equal(r.surface, "deepseek-additive");
+test("DeepSeek additive is explicitly hybrid", () => {
+  const standard = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "additive", true, all, "standard");
+  assert.deepEqual(standard.nextTools, ["read", "edit", "write", "str_replace_editor"]);
+  const minimal = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "additive", true, all, "minimal");
+  assert.deepEqual(minimal.nextTools, ["read", "edit", "write", "str_replace_editor"]);
 });
 
-test("deepseek unavailable falls back to native tools", () => {
+test("DeepSeek standard availability does not depend on str_replace_editor", () => {
   const available = new Set(["read", "edit", "write"]);
-  const r = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "replace", true, available);
-  assert.deepEqual(r.nextTools, ["read", "edit", "write"]);
-  assert.equal(r.surface, "deepseek-unavailable");
+  const result = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "replace", true, available, "standard");
+  assert.equal(result.surface, "deepseek-replace");
+});
+
+test("DeepSeek minimal is unavailable without str_replace_editor", () => {
+  const available = new Set(["read", "edit", "write"]);
+  const result = step(["read", "edit", "write"], "deepseek", initialToolOwnership(), "replace", true, available, "minimal");
+  assert.deepEqual(result.nextTools, ["read", "edit", "write"]);
+  assert.equal(result.surface, "deepseek-unavailable");
 });

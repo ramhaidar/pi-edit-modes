@@ -1,5 +1,6 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
+  DeepSeekPreset,
   ModelIdentity,
   ModeResolution,
   SessionToolMode,
@@ -16,6 +17,7 @@ import { registerDeepSeekTool } from "./tools/deepseek/index.ts";
 import {
   clearDeepSeekFsRuntimes,
   registerDeepSeekFilesystemTools,
+  registerDeepSeekReadImageTool,
   registerDeepSeekMutationCompatibilityHook,
   registerPiFilesystemTools,
   type FilesystemToolFlavor,
@@ -46,6 +48,12 @@ function modelLabel(model: unknown): string {
   const identity = modelIdentity(model);
   if (identity.provider && identity.id) return `${identity.provider}/${identity.id}`;
   return identity.id ?? identity.name ?? "(unknown model)";
+}
+
+function modelSupportsImages(model: unknown): boolean {
+  if (!model || typeof model !== "object") return false;
+  const input = (model as { input?: unknown }).input;
+  return Array.isArray(input) && input.includes("image");
 }
 
 function parseToolModeFlag(value: unknown): { mode: SessionToolMode; warning?: string } {
@@ -178,7 +186,11 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       sessionOverride: effectiveSessionOverride(cliSessionMode, runtimeSessionMode),
     });
     currentResolution = resolution;
-    const definitionsChanged = setFilesystemToolFlavor(resolution.mode === "deepseek" ? "deepseek" : "pi", ctx?.cwd ?? process.cwd());
+    const deepseekPreset: DeepSeekPreset = snapshot.settings.deepseek.preset;
+    const definitionsChanged = setFilesystemToolFlavor(
+      resolution.mode === "deepseek" && deepseekPreset === "standard" ? "deepseek" : "pi",
+      ctx?.cwd ?? process.cwd(),
+    );
     const surface = effectiveSurface(cliSessionSurface, runtimeSessionSurface, snapshot.settings.surface);
     const available = configuredToolNames(pi);
     const codexSupport = getCodexApplyPatchSupport(model, available.has("apply_patch"));
@@ -188,6 +200,8 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       desiredMode: resolution.mode,
       surface,
       codexSupported: codexSupport.supported,
+      deepseekPreset,
+      deepseekImageSupported: modelSupportsImages(model),
       ownership,
     });
     setActiveToolsIfChanged(transition.nextTools);
@@ -202,6 +216,8 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         desiredMode: resolution.mode,
         surface,
         codexSupported: false,
+        deepseekPreset,
+        deepseekImageSupported: modelSupportsImages(model),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -215,11 +231,13 @@ export default function editModesExtension(pi: ExtensionAPI): void {
           desiredMode: resolution.mode,
           surface,
           codexSupported: codexSupport.supported,
+          deepseekPreset,
+          deepseekImageSupported: modelSupportsImages(model),
           ownership: transition.nextOwnership,
         });
         setActiveToolsIfChanged(transition.nextTools);
       }
-    } else if (resolution.mode === "deepseek" && available.has("str_replace_editor") && !active.includes("str_replace_editor")) {
+    } else if (resolution.mode === "deepseek" && deepseekPreset === "minimal" && available.has("str_replace_editor") && !active.includes("str_replace_editor")) {
       const reduced = new Set([...available].filter((name) => !DEEPSEEK_TOOL_NAMES.includes(name as any)));
       transition = computeToolTransition({
         activeTools: active,
@@ -227,6 +245,8 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         desiredMode: resolution.mode,
         surface,
         codexSupported: codexSupport.supported,
+        deepseekPreset,
+        deepseekImageSupported: modelSupportsImages(model),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -239,7 +259,9 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     } else if (transition.surface === "gemini-unavailable") {
       currentSurfaceReason = "all Gemini file-edit tools are unavailable or excluded by Pi tool configuration";
     } else if (transition.surface === "deepseek-unavailable") {
-      currentSurfaceReason = "str_replace_editor is unavailable or excluded by Pi tool configuration";
+      currentSurfaceReason = deepseekPreset === "minimal"
+        ? "DeepSeek minimal preset requires str_replace_editor, but it is unavailable or excluded"
+        : "DeepSeek standard preset requires read/write/edit, but one or more tools are unavailable";
     } else {
       currentSurfaceReason = undefined;
     }
@@ -255,8 +277,21 @@ export default function editModesExtension(pi: ExtensionAPI): void {
 
   registerCodexApplyPatchTool(pi);
   registerDeepSeekTool(pi);
-  registerGeminiTools(pi, {
-    strictExactMatch: () => store.snapshot().settings.gemini.strictExactMatch,
+  registerDeepSeekReadImageTool(pi);
+  registerGeminiTools(pi);
+
+  pi.on("tool_call", async (event: any, ctx: any) => {
+    if (currentResolution.mode !== "gemini") return;
+    if (event?.toolName !== "replace" && event?.toolName !== "write_file") return;
+    if (store.snapshot().settings.gemini.approval === "auto_edit") return;
+    const path = event?.input && typeof event.input === "object" && typeof event.input.file_path === "string"
+      ? event.input.file_path
+      : "(unknown path)";
+    if (!ctx.hasUI) {
+      return { block: true, reason: `Gemini ${event.toolName} requires user approval, but this session has no interactive UI.` };
+    }
+    const approved = await ctx.ui.confirm("Approve Gemini file edit", `${event.toolName} ${path}`);
+    if (!approved) return { block: true, reason: `User rejected Gemini ${event.toolName} for ${path}.` };
   });
 
   pi.registerCommand("tool-mode", {
@@ -388,6 +423,8 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       codexSupport: support,
       codexGuard: guardCodexProviderPayload,
       activeTools,
+      surface: currentSurface,
+      deepseekPreset: store.snapshot().settings.deepseek.preset,
     });
     if (guarded.violation && ctx.hasUI) ctx.ui.notify(guarded.violation, guarded.fatal ? "error" : "warning");
     if (guarded.fatal) throw new Error(guarded.violation ?? "File-tool provider serialization invariant violated");
@@ -408,6 +445,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       desiredMode: "pi",
       surface: "replace",
       codexSupported: false,
+      deepseekPreset: store.snapshot().settings.deepseek.preset,
       ownership,
     });
     setActiveToolsIfChanged(transition.nextTools);

@@ -1,8 +1,9 @@
-import type { ToolMode, ToolSurface } from "../config/types.ts";
+import type { DeepSeekPreset, ToolMode, ToolSurface } from "../config/types.ts";
 
-export const GEMINI_TOOL_NAMES = ["replace_file_content", "multi_replace_file_content", "write_to_file"] as const;
-export const DEEPSEEK_TOOL_NAMES = ["str_replace_editor"] as const;
-export const MANAGED_CUSTOM_TOOLS = ["apply_patch", ...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES] as const;
+export const GEMINI_TOOL_NAMES = ["replace", "write_file"] as const;
+export const DEEPSEEK_TOOL_NAMES = ["str_replace_editor", "read_image"] as const;
+export const DEPRECATED_GEMINI_TOOL_NAMES = ["replace_file_content", "multi_replace_file_content", "write_to_file"] as const;
+export const MANAGED_CUSTOM_TOOLS = ["apply_patch", ...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES, ...DEPRECATED_GEMINI_TOOL_NAMES] as const;
 
 export type ManagedSurface =
   | "pi"
@@ -19,14 +20,16 @@ export type ManagedSurface =
 export interface ToolOwnership {
   surface: ManagedSurface;
   suppressesNative: boolean;
+  readRemovedByUs: boolean;
   editRemovedByUs: boolean;
   writeRemovedByUs: boolean;
+  readRestoreIndex?: number;
   editRestoreIndex?: number;
   writeRestoreIndex?: number;
 }
 
 export function initialToolOwnership(): ToolOwnership {
-  return { surface: "pi", suppressesNative: false, editRemovedByUs: false, writeRemovedByUs: false };
+  return { surface: "pi", suppressesNative: false, readRemovedByUs: false, editRemovedByUs: false, writeRemovedByUs: false };
 }
 
 function insertAt(tools: string[], name: string, index?: number): void {
@@ -37,13 +40,16 @@ function insertAt(tools: string[], name: string, index?: number): void {
 
 function restoreNative(tools: string[], ownership: ToolOwnership, available: ReadonlySet<string>): void {
   const candidates = [
+    { name: "read", owned: ownership.readRemovedByUs, index: ownership.readRestoreIndex },
     { name: "edit", owned: ownership.editRemovedByUs, index: ownership.editRestoreIndex },
     { name: "write", owned: ownership.writeRemovedByUs, index: ownership.writeRestoreIndex },
   ].filter((item) => item.owned && !tools.includes(item.name) && available.has(item.name));
   candidates.sort((a, b) => (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER));
   for (const item of candidates) insertAt(tools, item.name, item.index);
+  ownership.readRemovedByUs = false;
   ownership.editRemovedByUs = false;
   ownership.writeRemovedByUs = false;
+  ownership.readRestoreIndex = undefined;
   ownership.editRestoreIndex = undefined;
   ownership.writeRestoreIndex = undefined;
   ownership.suppressesNative = false;
@@ -60,6 +66,8 @@ export interface TransitionInput {
   desiredMode: ToolMode;
   surface: ToolSurface;
   codexSupported: boolean;
+  deepseekPreset?: DeepSeekPreset;
+  deepseekImageSupported?: boolean;
   ownership: ToolOwnership;
 }
 
@@ -73,47 +81,45 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   let tools = [...input.activeTools];
   const ownership: ToolOwnership = { ...input.ownership };
 
-  // Another extension/user reactivated a native tool we previously removed. Relinquish ownership
-  // so repeated synchronization never fights that external activation.
-  if (ownership.editRemovedByUs && tools.includes("edit")) {
-    ownership.editRemovedByUs = false;
-    ownership.editRestoreIndex = undefined;
-  }
-  if (ownership.writeRemovedByUs && tools.includes("write")) {
-    ownership.writeRemovedByUs = false;
-    ownership.writeRestoreIndex = undefined;
-  }
-
   tools = removeManagedCustomTools(tools);
 
   const availableGemini = GEMINI_TOOL_NAMES.filter((name) => input.availableTools.has(name));
   const codexActive = input.desiredMode === "codex" && input.codexSupported && input.availableTools.has("apply_patch");
   const geminiActive = input.desiredMode === "gemini" && availableGemini.length > 0;
-  const deepseekActive = input.desiredMode === "deepseek" && input.availableTools.has("str_replace_editor");
-  // DeepSeek keeps the `write` and `edit` tool names active alongside
-  // `str_replace_editor`; src/index.ts swaps those names to Harness-compatible
-  // definitions while DeepSeek mode is active. Only Codex/Gemini replace
-  // surfaces suppress the write/edit names entirely.
-  const suppressNative = (codexActive || geminiActive) && input.surface === "replace";
+  const deepseekPreset = input.deepseekPreset ?? "standard";
+  const deepseekStandardAvailable = ["read", "write", "edit"].every((name) => input.availableTools.has(name));
+  const deepseekMinimalAvailable = input.availableTools.has("str_replace_editor");
+  const deepseekActive = input.desiredMode === "deepseek" && (deepseekPreset === "minimal" ? deepseekMinimalAvailable : deepseekStandardAvailable);
+  const suppressEditWrite = (codexActive || geminiActive) && input.surface === "replace";
+  const suppressDeepSeekMinimal = deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
+  const suppressNative = suppressEditWrite || suppressDeepSeekMinimal;
 
   if (!suppressNative) {
     restoreNative(tools, ownership, input.availableTools);
   } else {
-    // All replace surfaces are one suppression class. codex-replace <-> gemini-replace therefore
-    // never transiently restores edit/write, while external reactivation is still respected.
-    if (!ownership.suppressesNative) {
-      const editIndex = tools.indexOf("edit");
-      const writeIndex = tools.indexOf("write");
-      if (editIndex !== -1) {
-        ownership.editRemovedByUs = true;
-        ownership.editRestoreIndex = editIndex;
-      }
-      if (writeIndex !== -1) {
-        ownership.writeRemovedByUs = true;
-        ownership.writeRestoreIndex = writeIndex;
-      }
-      tools = tools.filter((name) => name !== "edit" && name !== "write");
+    // Strict/replace surfaces are authoritative. If another extension reactivates
+    // a forbidden native file tool, the next synchronization removes it again;
+    // before_provider_request independently enforces the same invariant on wire.
+    const readIndex = tools.indexOf("read");
+    const editIndex = tools.indexOf("edit");
+    const writeIndex = tools.indexOf("write");
+    if (suppressDeepSeekMinimal && readIndex !== -1 && !ownership.readRemovedByUs) {
+      ownership.readRemovedByUs = true;
+      ownership.readRestoreIndex = readIndex;
     }
+    if (editIndex !== -1 && !ownership.editRemovedByUs) {
+      ownership.editRemovedByUs = true;
+      ownership.editRestoreIndex = editIndex;
+    }
+    if (writeIndex !== -1 && !ownership.writeRemovedByUs) {
+      ownership.writeRemovedByUs = true;
+      ownership.writeRestoreIndex = writeIndex;
+    }
+    tools = tools.filter((name) => {
+      if (name === "edit" || name === "write") return false;
+      if (suppressDeepSeekMinimal && name === "read") return false;
+      return true;
+    });
     ownership.suppressesNative = true;
   }
 
@@ -137,7 +143,13 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   } else if (!deepseekActive) {
     surface = "deepseek-unavailable";
   } else {
-    if (!tools.includes("str_replace_editor")) tools.push("str_replace_editor");
+    if (deepseekPreset === "minimal") {
+      if (!tools.includes("str_replace_editor")) tools.push("str_replace_editor");
+    } else {
+      for (const name of ["read", "write", "edit"] as const) if (!tools.includes(name)) tools.push(name);
+      if (input.deepseekImageSupported && input.availableTools.has("read_image") && !tools.includes("read_image")) tools.push("read_image");
+      if (input.surface === "additive" && input.availableTools.has("str_replace_editor") && !tools.includes("str_replace_editor")) tools.push("str_replace_editor");
+    }
     surface = input.surface === "additive" ? "deepseek-additive" : "deepseek-replace";
   }
 
@@ -150,6 +162,6 @@ export function sameToolList(a: readonly string[], b: readonly string[]): boolea
 }
 
 export function managedFileToolSurface(activeTools: readonly string[]): string {
-  const relevant = ["edit", "write", ...MANAGED_CUSTOM_TOOLS].filter((name) => activeTools.includes(name));
+  const relevant = ["read", "edit", "write", ...MANAGED_CUSTOM_TOOLS].filter((name) => activeTools.includes(name));
   return relevant.length ? relevant.join(", ") : "(none)";
 }

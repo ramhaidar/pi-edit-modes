@@ -1,5 +1,5 @@
-import type { ToolMode } from "../config/types.ts";
-import { DEEPSEEK_TOOL_NAMES, GEMINI_TOOL_NAMES, type ManagedSurface } from "./router.ts";
+import type { DeepSeekPreset, ToolMode } from "../config/types.ts";
+import { DEEPSEEK_TOOL_NAMES, DEPRECATED_GEMINI_TOOL_NAMES, GEMINI_TOOL_NAMES, type ManagedSurface } from "./router.ts";
 
 export interface ProviderGuardResult { payload: unknown; changed: boolean; violation?: string; fatal?: boolean }
 
@@ -204,11 +204,14 @@ function googleFunctionParameters(declaration: Record<string, unknown>): Record<
 
 
 /**
- * Exact model-facing schemas from DeepSeek Harness dsh-tool-fs.
+ * Base model-facing schemas from DeepSeek Harness dsh-tool-fs.
  *
  * The registered Pi tools use an internal strict superset so prepareArguments can
  * publish Pi-native aliases before third-party tool_call guards run. These wire
  * schemas are restored immediately before serialization to the provider.
+ * sandbox_permissions/justification are intentionally absent: upstream only adds
+ * those fields when the active filesystem sandbox exposes an escalation API, and
+ * this Pi backend currently exposes no such capability.
  */
 export const DEEPSEEK_WRITE_WIRE_SCHEMA = {
   type: "object",
@@ -358,27 +361,27 @@ function rewriteGoogleCompatibilityApplyPatch(payload: unknown, support: CodexPr
 }
 
 
-const DEEPSEEK_SHELL_EDIT_GUARD =
+const DEEPSEEK_SHELL_EDIT_GUIDANCE =
   " In DeepSeek file-edit mode, do not create, overwrite, append, patch, or rewrite files with this shell tool (including redirection, PowerShell Set-Content/WriteAllLines, sed -i, perl -pi, or scripts that write files). Use the write, edit, or str_replace_editor file tools for file mutations. Shell use is limited to inspection and command execution that does not modify files.";
 const SHELL_TOOL_NAMES = new Set(["bash", "shell", "powershell", "pwsh"]);
 
-function appendDeepSeekShellGuard(tool: unknown): { tool: unknown; changed: boolean } {
+function appendDeepSeekShellGuidance(tool: unknown): { tool: unknown; changed: boolean } {
   if (!isRecord(tool)) return { tool, changed: false };
   const name = wireName(tool);
   if (!name || !SHELL_TOOL_NAMES.has(name)) return { tool, changed: false };
 
   if (isRecord(tool.function)) {
     const description = typeof tool.function.description === "string" ? tool.function.description : "";
-    if (description.includes(DEEPSEEK_SHELL_EDIT_GUARD.trim())) return { tool, changed: false };
+    if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
     return {
-      tool: { ...tool, function: { ...tool.function, description: `${description}${DEEPSEEK_SHELL_EDIT_GUARD}`.trim() } },
+      tool: { ...tool, function: { ...tool.function, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() } },
       changed: true,
     };
   }
 
   const description = typeof tool.description === "string" ? tool.description : "";
-  if (description.includes(DEEPSEEK_SHELL_EDIT_GUARD.trim())) return { tool, changed: false };
-  return { tool: { ...tool, description: `${description}${DEEPSEEK_SHELL_EDIT_GUARD}`.trim() }, changed: true };
+  if (description.includes(DEEPSEEK_SHELL_EDIT_GUIDANCE.trim())) return { tool, changed: false };
+  return { tool: { ...tool, description: `${description}${DEEPSEEK_SHELL_EDIT_GUIDANCE}`.trim() }, changed: true };
 }
 
 function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
@@ -388,7 +391,7 @@ function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
 
   if (Array.isArray(payload.tools)) {
     const tools = payload.tools.map((tool) => {
-      const guarded = appendDeepSeekShellGuard(tool);
+      const guarded = appendDeepSeekShellGuidance(tool);
       changed ||= guarded.changed;
       return guarded.tool;
     });
@@ -400,7 +403,7 @@ function guardDeepSeekShellDescriptions(payload: unknown): ProviderGuardResult {
     const groups = nextPayload.config.tools.map((group) => {
       if (!isRecord(group) || !Array.isArray(group.functionDeclarations)) return group;
       const declarations = group.functionDeclarations.map((tool) => {
-        const guarded = appendDeepSeekShellGuard(tool);
+        const guarded = appendDeepSeekShellGuidance(tool);
         googleChanged ||= guarded.changed;
         return guarded.tool;
       });
@@ -430,10 +433,17 @@ export function guardProviderPayload(input: {
   codexSupport: CodexProviderSupport;
   codexGuard: CodexProviderGuard;
   activeTools?: readonly string[];
+  surface?: ManagedSurface;
+  deepseekPreset?: DeepSeekPreset;
 }): ProviderGuardResult {
-  const gemini = new Set<string>(GEMINI_TOOL_NAMES);
+  const strictSurface = input.surface?.endsWith("-replace") === true;
+  const deprecatedGemini = new Set<string>(DEPRECATED_GEMINI_TOOL_NAMES);
   if (input.mode === "codex") {
-    const otherCustomTools = new Set<string>([...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES]);
+    const otherCustomTools = new Set<string>([...GEMINI_TOOL_NAMES, ...DEEPSEEK_TOOL_NAMES, ...DEPRECATED_GEMINI_TOOL_NAMES]);
+    if (strictSurface) {
+      otherCustomTools.add("edit");
+      otherCustomTools.add("write");
+    }
     const stripped = stripTools(input.payload, otherCustomTools);
     if (stripped.fatal) return stripped;
 
@@ -447,15 +457,27 @@ export function guardProviderPayload(input: {
     return mergeGuardResults(combined, google);
   }
 
-  const forbidden = new Set<string>(["apply_patch"]);
+  const forbidden = new Set<string>(["apply_patch", ...deprecatedGemini]);
   if (input.mode === "pi") {
     for (const name of GEMINI_TOOL_NAMES) forbidden.add(name);
     for (const name of DEEPSEEK_TOOL_NAMES) forbidden.add(name);
   } else if (input.mode === "gemini") {
     for (const name of DEEPSEEK_TOOL_NAMES) forbidden.add(name);
+    if (strictSurface) {
+      forbidden.add("edit");
+      forbidden.add("write");
+    }
     if (input.activeTools) for (const name of GEMINI_TOOL_NAMES) if (!input.activeTools.includes(name)) forbidden.add(name);
   } else if (input.mode === "deepseek") {
     for (const name of GEMINI_TOOL_NAMES) forbidden.add(name);
+    const preset = input.deepseekPreset ?? "standard";
+    if (strictSurface && preset === "standard") forbidden.add("str_replace_editor");
+    if (strictSurface && preset === "minimal") {
+      forbidden.add("read");
+      forbidden.add("write");
+      forbidden.add("edit");
+      forbidden.add("read_image");
+    }
     if (input.activeTools) for (const name of DEEPSEEK_TOOL_NAMES) if (!input.activeTools.includes(name)) forbidden.add(name);
   }
   const stripped = stripTools(input.payload, forbidden);
