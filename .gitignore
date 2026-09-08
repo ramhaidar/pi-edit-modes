@@ -1,0 +1,4 @@
+node_modules/
+
+# Vendored upstream repos (fetched by scripts/fetch-vendors.mjs)
+vendor/
