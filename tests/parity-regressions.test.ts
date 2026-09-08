@@ -47,7 +47,10 @@ test("DeepSeek observation state is session-scoped even when sessions share cwd"
     const runtimeA = getDeepSeekFsRuntime(sessionA);
     const runtimeB = getDeepSeekFsRuntime(sessionB);
     await runtimeA.read(path);
-    await assert.rejects(() => runtimeB.edit(path, "alpha", "beta", false), /not observed|observe|read/i);
+    await assert.rejects(
+      () => runtimeB.edit(path, "alpha", "beta", false),
+      /not observed|observe|read/i,
+    );
   } finally {
     clearDeepSeekFsRuntimes();
     await rm(cwd, { recursive: true, force: true });
@@ -63,16 +66,44 @@ test("DeepSeek read_image exposes exact schema and rejects paths outside workspa
     assert.deepEqual(Object.keys(tool.parameters.properties), ["file_path"]);
     assert.deepEqual(tool.parameters.required, ["file_path"]);
 
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
     await writeFile(join(cwd, "ok.png"), png);
+    await writeFile(join(cwd, "fake.png"), "not an image", "utf8");
     await writeFile(join(outside, "secret.png"), png);
     const ctx = { cwd, model: { input: ["text", "image"] } };
-    const result = await tool.execute("image-1", { file_path: "ok.png" }, new AbortController().signal, undefined, ctx);
+    const result = await tool.execute(
+      "image-1",
+      { file_path: "ok.png" },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
     const image = result.content.find((part: any) => part.type === "image");
     assert.equal(image.mimeType, "image/png");
 
     await assert.rejects(
-      () => tool.execute("image-2", { file_path: join(outside, "secret.png") }, new AbortController().signal, undefined, ctx),
+      () =>
+        tool.execute(
+          "image-fake",
+          { file_path: "fake.png" },
+          new AbortController().signal,
+          undefined,
+          ctx,
+        ),
+      /unsupported image format/i,
+    );
+    await assert.rejects(
+      () =>
+        tool.execute(
+          "image-2",
+          { file_path: join(outside, "secret.png") },
+          new AbortController().signal,
+          undefined,
+          ctx,
+        ),
       /outside the workspace/i,
     );
   } finally {
@@ -81,16 +112,30 @@ test("DeepSeek read_image exposes exact schema and rejects paths outside workspa
   }
 });
 
-test("Codex apply_patch advertises and accepts Environment ID in its current grammar", async () => {
+test("Codex apply_patch advertises Environment ID but rejects selection on single-environment Pi", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-codex-env-"));
   try {
     const tool = captureTools(registerCodexApplyPatchTool)[0];
     const grammar = tool.constrainedSampling.variants.openai_lark as string;
     assert.match(grammar, /environment_id\?/);
     assert.match(grammar, /\*\*\* Environment ID:/);
+    await assert.rejects(
+      () =>
+        tool.execute(
+          "patch-env",
+          {
+            input:
+              "*** Begin Patch\n*** Environment ID: arbitrary\n*** Add File: env.txt\n+wrong\n*** End Patch\n",
+          },
+          new AbortController().signal,
+          undefined,
+          { cwd },
+        ),
+      /environment selection is unavailable/i,
+    );
     await tool.execute(
-      "patch-1",
-      { input: "*** Begin Patch\n*** Environment ID: current\n*** Add File: env.txt\n+ok\n*** End Patch\n" },
+      "patch-current",
+      { input: "*** Begin Patch\n*** Add File: env.txt\n+ok\n*** End Patch\n" },
       new AbortController().signal,
       undefined,
       { cwd },
