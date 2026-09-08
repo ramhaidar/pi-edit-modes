@@ -15,8 +15,8 @@ Use **pnpm exclusively** in this repository. Never use `npm`, `npx`, `yarn`, or 
 
 - `pi`: Pi native `edit`/`write`
 - `codex`: Codex-compatible `apply_patch`
-- `gemini`: `replace_file_content`, `multi_replace_file_content`, `write_to_file`
-- `deepseek`: Harness-compatible `read`/`write`/`edit` (overriding Pi's native tool *names*) plus `str_replace_editor`
+- `gemini`: Gemini CLI-shaped `replace` and `write_file`
+- `deepseek`: Harness-compatible `standard` preset (`read`/`write`/`edit`, conditional `read_image`) or `minimal` preset (`str_replace_editor`)
 
 Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships source directly (`files: ["src"]`) — there is no build step.
 
@@ -24,31 +24,43 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 
 ## Commands
 
-| Task | Command |
-|---|---|
-| Install deps | `pnpm install` |
-| Run all tests | `pnpm test` |
-| Run one test file | `pnpm test -- tests/router.test.ts` or `node --experimental-strip-types --test tests/router.test.ts` |
-| Fetch vendor repos | `pnpm fetch-vendors` (add `--force` to re-download) |
+| Task                  | Command                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------- |
+| Install deps          | `pnpm install`                                                                                       |
+| Run all quality gates | `pnpm check`                                                                                         |
+| Typecheck             | `pnpm typecheck`                                                                                     |
+| Lint                  | `pnpm lint`                                                                                          |
+| Format code           | `pnpm format`                                                                                        |
+| Check formatting      | `pnpm format:check`                                                                                  |
+| Run all tests         | `pnpm test`                                                                                          |
+| Run one test file     | `pnpm test -- tests/router.test.ts` or `node --experimental-strip-types --test tests/router.test.ts` |
+| Fetch vendor repos    | `pnpm fetch-vendors` (add `--force` to re-download)                                                  |
 
-- No build, lint, format, or typecheck command is defined. There is no CI configuration in this repo.
+- There is no build step; the package ships TypeScript source directly. `pnpm typecheck`, `pnpm lint`, and CI are quality gates rather than build outputs.
+- `pnpm check` runs format check, typecheck, lint, and tests in that order.
+- GitHub Actions runs frozen install, typecheck, lint, and tests on Node 22 and Node 24.
 - Tests run on Node's built-in runner with `--experimental-strip-types` (see `package.json` `scripts.test`).
+- `tsconfig.json` includes both `src/` and `tests/`; test files must typecheck too (`@types/node` is a devDependency for `node:test`/`node:assert`).
+- Prettier (`.prettierrc.json` + `.prettierignore`) is the formatter. `src/tools/codex/engine.ts`, `vendor/`, and `pnpm-lock.yaml` are excluded from formatting (see Code Style / Safety).
 - `vendor/` is gitignored; `pnpm fetch-vendors` downloads upstream repos as GitHub archive zips and records SHAs in `vendor/.state.json` (skips unchanged repos).
 
 ## Code Style
 
 - TypeScript with explicit `.ts` extensions on relative imports (required by `node --experimental-strip-types`).
 - Double quotes and semicolons throughout.
+- Prettier enforces formatting: 2-space indent, double quotes, semicolons, `printWidth: 100`, LF endings, trailing commas (`"all"`). Run `pnpm format` after edits, or `pnpm format:check` to verify.
 - `src/tools/codex/engine.ts` and nearby files use tabs; the rest of the repo uses spaces — preserve each file's existing indentation. The Codex engine is deliberately preserved from an upstream single-file baseline (commit `6525b95dae2082ac9fee672b14c2cffdef172bb8`); refactor it only when the task truly requires it.
+- `src/tools/codex/engine.ts` is in `.prettierignore` and must never be reformatted.
+- Tests in `tests/deepseek-fs-tools.test.ts` assert against source-file text with regexes; keep those regexes whitespace-tolerant (`\s*` around call boundaries) so they survive Prettier reformatting.
 - Tests use `node:test` + `node:assert/strict` and import from `../src/...` with `.ts` extensions.
 
 ## Architecture Notes
 
 - `src/config/` — settings schema/defaults (`schema.ts`), persistence with temp-file + fsync + rename (`settings-store.ts`), mode resolver (`resolver.ts`), `models.json` parsing that tolerates BOM and comments (`models-config.ts`).
   - Mode precedence: `--tool-mode` CLI → `/tool-mode` session → `x-pi-tool-mode` in `models.json` → auto-detection → `defaultMode` from `~/.pi/agent/edit-modes.json`.
-- `src/modes/router.ts` — universal tool-surface router (`replace`/`additive`) and native-tool ownership. It only owns native tools it actually removed and never resurrects tools excluded from Pi's registry.
+- `src/modes/router.ts` — universal tool-surface router (`replace`/`additive`) and native-tool ownership. Strict `replace` surfaces are authoritative and remove forbidden native tools again if another extension reactivates them; tools excluded from Pi's registry are never resurrected.
 - `src/modes/provider-guard.ts` — `before_provider_request` payload filtering per mode, including OpenAI/Anthropic top-level tool arrays and native Google `functionDeclarations`.
-- `src/tools/codex|gemini|deepseek/` — per-model tool engines. DeepSeek mode *replaces the definitions of* Pi's native `read`/`write`/`edit` (the names stay active) and adds `str_replace_editor`; leaving DeepSeek mode restores Pi's definitions.
+- `src/tools/codex|gemini|deepseek/` — per-model tool engines. Gemini uses current `replace`/`write_file` vocabulary and a proposal/correction/approval lifecycle. DeepSeek `standard` replaces Pi's `read`/`write`/`edit` definitions and conditionally adds `read_image`; `minimal` exposes `str_replace_editor` instead. Leaving DeepSeek restores Pi's definitions.
 - `src/tools/deepseek/fs-parity.ts`, `arg-compat.ts`, `win32.ts` — Harness parity, Pi-host argument aliases, and Windows-specific behavior (koffi/advapi32/kernel32).
 - `src/ui/` — `/tool-mode` and `/tool-surface` command + settings overlay.
 - `vendor/` — fetched upstream sources (openai/codex, google-gemini/gemini-cli, deepseek-ai/deepseek-harness) used as parity reference material; not part of the published package.
@@ -58,10 +70,10 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 - `vendor/` is generated: never hand-edit; regenerate with `pnpm fetch-vendors` (`--force` to refresh even when the recorded SHA matches).
 - `vendor/.state.json` records fetched SHAs; it is managed by the fetch script.
 - Treat the Codex engine as a preserved upstream baseline (see Code Style) — behavior-parity changes there need explicit justification and test coverage.
-- Behavior changes to tool schemas/semantics (Gemini exact-match rules, DeepSeek observation/version guards, provider-guard stripping) must be reflected in `tests/` and, where user-visible, in `README.md`.
+- Behavior changes to tool schemas/semantics (Gemini exact/flexible/regex/fuzzy + correction flow, DeepSeek observation/version guards, provider-guard stripping) must be reflected in `tests/` and, where user-visible, in `README.md`.
 
 ## Agent Workflow
 
-- Make minimal, behavior-preserving changes; this repo favors exact-match/Harness-parity semantics over convenience.
-- Before finishing, run `pnpm test` and keep it green. Any new tool behavior gets a matching test file under `tests/`.
+- Make minimal, behavior-preserving changes; this repo favors upstream model-facing and runtime-flow parity over convenience, while documenting host capabilities that cannot be reproduced exactly.
+- Before finishing, run `pnpm check` and keep format, typecheck, lint, and tests green. Any new tool behavior gets a matching test file under `tests/`.
 - Settings persistence changes must preserve the migration path from the legacy `codex.surface` shape (see `tests/settings.test.ts`).

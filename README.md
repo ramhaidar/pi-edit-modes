@@ -51,7 +51,8 @@ Surface resolution:
     "deepseek": true
   },
   "gemini": {
-    "approval": "ask_user"
+    "approval": "ask_user",
+    "disableLLMCorrection": true
   },
   "deepseek": {
     "preset": "standard"
@@ -63,6 +64,7 @@ Settings:
 
 - `surface`: `replace` or `additive`.
 - `gemini.approval`: `ask_user` or `auto_edit`.
+- `gemini.disableLLMCorrection`: boolean, default `true`, matching current Gemini CLI's correction default.
 - `deepseek.preset`: `standard` or `minimal`.
 
 The legacy `codex.surface` setting is accepted as a migration fallback. The legacy `gemini.strictExactMatch` boolean is also accepted so older settings files still load, but it is no longer projected into current Gemini behavior.
@@ -80,11 +82,11 @@ Custom model example:
       "models": [
         {
           "id": "gemini-3-pro",
-          "x-pi-tool-mode": "codex"
-        }
-      ]
-    }
-  }
+          "x-pi-tool-mode": "codex",
+        },
+      ],
+    },
+  },
 }
 ```
 
@@ -153,6 +155,8 @@ Replacement recovery follows this order:
 
 By default a replacement must resolve to one intended match. `allow_multiple=true` permits replacing all accepted matches. Existing file line endings are preserved.
 
+If `old_string` is empty and the target does not exist, `replace` creates the file from `new_string`, matching current Gemini CLI create semantics. If the file already exists, an empty `old_string` is rejected. If all normal matching strategies fail on an eligible non-JSON-family file and `gemini.disableLLMCorrection=false`, the extension performs a bounded utility-model correction pass using `instruction`, the failure, and the latest on-disk file content, then retries the replacement against that fresh content.
+
 ### `write_file`
 
 Model-facing parameters are exactly `file_path` and `content`.
@@ -161,6 +165,7 @@ Model-facing parameters are exactly `file_path` and `content`.
 - existing target: overwrite
 - no hidden overwrite flag is required
 - omission placeholders such as `(rest of file unchanged)` are rejected because `content` must be complete
+- eligible non-JSON-family content follows Gemini CLI's correction policy: with LLM correction enabled it can use the utility escaping corrector; with correction disabled, current Gemini 2/3 and custom models keep the original content while older Gemini families may use deterministic aggressive unescape
 
 Both Gemini mutation tools use the shared secure filesystem facade and file mutation queue.
 
@@ -168,8 +173,10 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 
 `gemini.approval` defaults to `ask_user`.
 
-- `ask_user`: every Gemini `replace`/`write_file` mutation requests interactive confirmation. A non-interactive session fails closed because approval cannot be obtained.
-- `auto_edit`: Gemini mutations execute without the extension-level confirmation prompt.
+- `ask_user`: the extension calculates the proposed mutation first, including recovery/correction, generates the diff, shows it for approval, and allows the user to replace the full proposed content before commit. A non-interactive session fails closed because approval cannot be obtained.
+- `auto_edit`: the same proposal/recovery pipeline still runs, including correction only when enabled, but the extension skips the interactive approval UI.
+
+The executor commits only the prepared proposal for that tool call and verifies that the on-disk preimage has not changed since proposal calculation, so an edit approved against stale content is rejected instead of silently clobbering external changes.
 
 ## DeepSeek semantics
 
@@ -180,9 +187,13 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 - `read(file_path, offset?, limit?)` returns Harness-style line windows and records the observation used by later guarded writes/edits.
 - `write(file_path, content)` creates or fully replaces UTF-8 text. Existing-file overwrite requires a current observation and uses stale-version/no-clobber checks.
 - `edit(file_path, old_string, new_string, replace_all?)` performs literal replacement with unique-match-by-default semantics and uses the same observation/version state.
-- `read_image(file_path)` is added only when the current model supports image input. It resolves the real target and refuses files outside the current workspace.
+- `read_image(file_path)` is added only when the current model supports image input. It resolves the real target, refuses files outside the current workspace, validates the actual image bytes, and normalizes/resizes supported images through Pi's image pipeline before returning a native image block.
 
 Observation/version state is scoped by both Pi session ID and workspace path. Two sessions in the same directory therefore do not share filesystem observations.
+
+`read` remains parallel. `write` and `edit` are registered as sequential/exclusive scheduler operations to match current DeepSeek Harness mutation scheduling. Text reads switch to a bounded streaming path at 10 MiB, preserving the same line-window/output limits without loading the entire large file into memory.
+
+Pi's extension API does not currently expose DeepSeek Harness's durable attachment-store service, so `read_image` returns the normalized native image block directly rather than persisting an attachment reference. This is an explicit host-capability divergence, not a model-facing name/schema divergence.
 
 On `replace`, `str_replace_editor` is not exposed by the standard preset. On `additive`, it may coexist when available; that is explicitly hybrid behavior.
 
@@ -214,7 +225,7 @@ The constrained grammar also accepts an optional header immediately after `*** B
 *** Environment ID: <id>
 ```
 
-Pi currently exposes one workspace environment per invocation. The header is parsed for protocol compatibility and resolves to the current invocation environment; it is not a multi-environment selector in this host.
+Pi currently exposes one workspace environment per invocation. The header remains part of the accepted grammar for protocol compatibility, but execution fails closed when an Environment ID is supplied because this host has no environment catalog from which to resolve that ID. The ID is never silently ignored or mapped to the current workspace.
 
 For Google/Gemini providers explicitly overridden to Codex mode, `apply_patch` is represented as a compatibility function whose `input` string contains the raw `*** Begin Patch` ... `*** End Patch` payload.
 
@@ -238,12 +249,17 @@ Deprecated Gemini names `replace_file_content`, `multi_replace_file_content`, an
 
 Codex, Gemini, and DeepSeek mutation tools expose generated diffs through the shared call-body renderer. Headers use compact action + target forms such as `apply_patch A /index.php`, `replace M /index.php`, and `str_replace_editor M /index.php`.
 
-## Tests
+## Quality gates
 
 ```bash
+pnpm typecheck
+pnpm lint
 pnpm test
+pnpm check
 ```
 
-Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini schema/recovery/overwrite behavior, DeepSeek observation and stale-version semantics, session isolation, image containment, concurrency, `str_replace_editor`, Codex Environment ID grammar, and diff rendering.
+`pnpm typecheck` uses the repository `tsconfig.json`. `pnpm lint` runs Oxlint with warnings denied across `src` and `tests`. GitHub Actions runs install, typecheck, lint, and tests on Node 22 and Node 24.
+
+Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini create/recovery/correction/approval behavior, DeepSeek observation and stale-version semantics, session isolation, exclusive mutation scheduling, large-file streaming, image validation/normalization, `str_replace_editor`, Codex Environment ID grammar/execution rejection on a single-environment host, and diff rendering.
 
 Two filesystem parity tests are skipped on platforms where the required POSIX mode/symlink behavior cannot be exercised by the current test environment.
