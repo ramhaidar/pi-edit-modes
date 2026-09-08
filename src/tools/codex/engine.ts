@@ -46,8 +46,9 @@ const APPLY_PATCH_PROMPT_GUIDELINES = [
 	"For updates, use `@@` context hunks with space/`-`/`+` line prefixes; put `*** Move to:` immediately after an Update File header when renaming.",
 ];
 
-const APPLY_PATCH_GRAMMAR = `start: begin_patch hunk+ end_patch
+const APPLY_PATCH_GRAMMAR = `start: begin_patch environment_id? hunk+ end_patch
 begin_patch: "*** Begin Patch" LF
+environment_id: "*** Environment ID: " /(.+)/ LF
 end_patch: "*** End Patch" LF?
 
 hunk: add_hunk | delete_hunk | update_hunk
@@ -2825,9 +2826,10 @@ export function registerCodexApplyPatchTool(pi: ExtensionAPI): void {
 				throw new Error(`apply_patch verification failed: ${message}`);
 			}
 
-			if (parsed.environmentId !== undefined) {
-				throw new Error("apply_patch environment selection is unavailable for this turn");
-			}
+			// Pi currently exposes a single workspace per tool invocation. Accept the
+			// upstream environment_id grammar for protocol parity and resolve it to the
+			// current invocation environment. Multi-environment selection can be wired
+			// here if/when the host exposes an environment catalog.
 
 			// Semantic path resolution must preserve the turn cwd spelling. Do not realpath() it.
 			const semanticCwd = resolve(ctx.cwd);
