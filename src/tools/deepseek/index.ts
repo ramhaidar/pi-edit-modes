@@ -62,6 +62,12 @@ function codepointCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+export function deepSeekDirectoryEntryMarker(
+  type: "file" | "directory" | "symlink" | "other",
+): "d" | "f" | "?" {
+  return type === "directory" ? "d" : type === "file" ? "f" : "?";
+}
+
 async function directoryListing(
   displayPath: string,
   targetKey: string,
@@ -96,9 +102,7 @@ async function directoryListing(
       } catch {
         type = "other";
       }
-      rows.push(
-        `${type === "directory" ? "d" : type === "file" ? "f" : type === "symlink" ? "l" : "?"}\t${displayChild}`,
-      );
+      rows.push(`${deepSeekDirectoryEntryMarker(type)}\t${displayChild}`);
       if (type === "directory" && depth < 2)
         rows.push(...(await visit(displayChild, actualChild, depth + 1)));
     }
@@ -171,12 +175,12 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
     label: DEEPSEEK_TOOL_NAME,
     description: DEFAULT_DESCRIPTION,
     promptSnippet:
-      "Use write for file creation/full replacement, edit for targeted literal replacements, and str_replace_editor when its view/create/str_replace/insert interface is useful. Do not edit files through bash, PowerShell, shell redirection, scripts, or inline shell commands.",
+      "Use str_replace_editor for file viewing, creation, exact replacement, and insertion. Do not edit files through bash, PowerShell, shell redirection, scripts, or inline shell commands.",
     promptGuidelines: [
       "Use view before editing when you need exact file context.",
       "old_str must be an exact unique match for str_replace.",
       "create refuses to overwrite an existing file.",
-      "For file mutations, use write, edit, or str_replace_editor instead of bash/PowerShell/shell commands; shell tools are for inspection and execution only.",
+      "For file mutations, use str_replace_editor instead of bash/PowerShell/shell commands; shell tools are for inspection and execution only.",
     ],
     parameters: Type.Object(
       {
@@ -239,7 +243,7 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
       return component;
     },
     renderResult,
-    executionMode: "parallel",
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const runtime = getDeepSeekFsRuntime(ctx);
 

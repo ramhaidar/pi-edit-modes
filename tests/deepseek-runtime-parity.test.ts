@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerDeepSeekFilesystemTools } from "../src/tools/deepseek/fs-tools.ts";
 import { DEEPSEEK_READ_STREAM_MIN_SIZE } from "../src/tools/deepseek/fs-parity.ts";
+import { deepSeekDirectoryEntryMarker, registerDeepSeekTool } from "../src/tools/deepseek/index.ts";
 import { clearDeepSeekFsRuntimes, getDeepSeekFsRuntime } from "../src/tools/deepseek/runtime.ts";
 
 function tools(): any[] {
@@ -18,6 +19,23 @@ test("DeepSeek mutations are sequential while read stays parallel", () => {
   assert.equal(values.find((value) => value.name === "read")?.executionMode, "parallel");
   assert.equal(values.find((value) => value.name === "write")?.executionMode, "sequential");
   assert.equal(values.find((value) => value.name === "edit")?.executionMode, "sequential");
+});
+
+test("DeepSeek minimal str_replace_editor is sequential and does not advertise unavailable write/edit", () => {
+  const values: any[] = [];
+  registerDeepSeekTool({ registerTool: (value: any) => values.push(value) } as any);
+  const editor = values.find((value) => value.name === "str_replace_editor");
+  assert.equal(editor?.executionMode, "sequential");
+  assert.match(editor?.promptSnippet ?? "", /str_replace_editor/);
+  assert.doesNotMatch(editor?.promptSnippet ?? "", /Use write|edit for targeted/);
+  assert.doesNotMatch((editor?.promptGuidelines ?? []).join("\n"), /use write, edit, or/i);
+});
+
+test("DeepSeek minimal directory markers match Harness for symlinks and other entries", () => {
+  assert.equal(deepSeekDirectoryEntryMarker("directory"), "d");
+  assert.equal(deepSeekDirectoryEntryMarker("file"), "f");
+  assert.equal(deepSeekDirectoryEntryMarker("symlink"), "?");
+  assert.equal(deepSeekDirectoryEntryMarker("other"), "?");
 });
 
 test("DeepSeek large-file read keeps window semantics through streaming path", async () => {
