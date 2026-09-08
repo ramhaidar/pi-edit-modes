@@ -1,26 +1,21 @@
 # pi-edit-modes
 
-A Pi extension package that routes file editing tools by model:
+A Pi extension package that selects model-facing file tools by model family while keeping the provider payload aligned with the selected tool surface.
 
-- `pi`: Pi's native `edit` and `write`
-- `codex`: Codex-compatible `apply_patch`
-- `gemini`: Antigravity-style `replace_file_content`, `multi_replace_file_content`, and `write_to_file`
-- `deepseek`: DeepSeek Harness-compatible `read`, `write`, `edit`, and `str_replace_editor` (`view`, `create`, `str_replace`, `insert`)
+Supported modes:
 
-Codex and Gemini use the universal custom-tool surface normally:
+- `pi`: Pi native file tools.
+- `codex`: Codex-compatible `apply_patch`.
+- `gemini`: Gemini CLI-shaped `replace` and `write_file`.
+- `deepseek`: DeepSeek Harness-shaped filesystem tools, with `standard` and `minimal` presets.
 
-- `replace`: custom mode tools replace Pi native `edit`/`write`
-- `additive`: custom mode tools are added alongside Pi native `edit`/`write`
-
-DeepSeek is intentionally different: both `replace` and `additive` keep the `write`/`edit` tool names active, but DeepSeek mode overrides Pi's definitions with DeepSeek Harness-compatible `read`/`write`/`edit` schemas and execution semantics, then adds `str_replace_editor`. Leaving DeepSeek mode restores Pi's native definitions.
-
-The Codex parser/runtime/security implementation is preserved from the supplied single-file extension baseline `6525b95dae2082ac9fee672b14c2cffdef172bb8`. The package adds a shared mode resolver, universal surface router, and Gemini exact-match engine around it.
+The package aims for model-facing contract alignment, not a claim that every upstream runtime capability is reproduced. Host-specific behavior and known limitations are documented below.
 
 ## Install
 
 Install the folder/package with Pi's package installation mechanism, or place it where Pi loads package resources. The manifest is in `package.json` under `pi.extensions`.
 
-Runtime Pi packages are peer dependencies because Pi provides them to extensions.
+Pi runtime packages are peer dependencies. They are also dev dependencies so a clean checkout can run the local test suite without relying on an externally installed Pi runtime.
 
 ## Resolution order
 
@@ -35,7 +30,7 @@ Mode resolution:
 Surface resolution:
 
 1. `--tool-surface` CLI override
-2. runtime `/tool-surface` or TUI session override
+2. runtime `/tool-surface` session override
 3. `surface` from `edit-modes.json`
 
 `--apply-patch-mode` and `PI_APPLY_PATCH_TOOL_MODE` remain supported as deprecated migration inputs when no new mode/surface CLI override is set.
@@ -56,20 +51,30 @@ Surface resolution:
     "deepseek": true
   },
   "gemini": {
-    "strictExactMatch": true
+    "approval": "ask_user"
+  },
+  "deepseek": {
+    "preset": "standard"
   }
 }
 ```
 
-The old v0.1.0 shape `codex.surface` is accepted and migrated in memory to the universal top-level `surface` setting. Settings writes from the TUI use a temp file, fsync, and rename.
+Settings:
+
+- `surface`: `replace` or `additive`.
+- `gemini.approval`: `ask_user` or `auto_edit`.
+- `deepseek.preset`: `standard` or `minimal`.
+
+The legacy `codex.surface` setting is accepted as a migration fallback. The legacy `gemini.strictExactMatch` boolean is also accepted so older settings files still load, but it is no longer projected into current Gemini behavior.
+
+Settings writes from the TUI use a temp file, fsync, and rename.
 
 ## Model override
 
-Custom model:
+Custom model example:
 
 ```jsonc
 {
-  // Comments and UTF-8 BOM are accepted like Pi's current models.json loader.
   "providers": {
     "my-proxy": {
       "models": [
@@ -83,7 +88,7 @@ Custom model:
 }
 ```
 
-Built-in override:
+Built-in override example:
 
 ```json
 {
@@ -99,83 +104,146 @@ Built-in override:
 }
 ```
 
-The package reads raw `models.json`, strips BOM/comments using Pi-compatible lexical behavior, and does not depend on extension metadata being propagated onto `ctx.model`.
+The package reads raw `models.json`, strips UTF-8 BOM/comments using Pi-compatible lexical behavior, and does not depend on custom metadata being propagated onto `ctx.model`.
 
 ## Commands
 
-- `/tool-mode` opens a centered settings overlay.
+- `/tool-mode` opens the settings overlay.
 - `/tool-mode auto|gemini|codex|deepseek|pi` changes the runtime session mode override.
-- `/tool-surface auto|replace|additive` changes the runtime session surface override for Codex, Gemini, and DeepSeek.
+- `/tool-surface auto|replace|additive` changes the runtime session surface override.
 - `/apply-patch-mode replace|additive|off` is a deprecated compatibility alias.
 
-The overlay reports both the resolved mode and effective tool surface. If a requested custom mode is unavailable, it reports the Pi fallback and reason instead of labeling the unavailable mode as effective. The overlay can also configure Gemini strict exact matching.
+The overlay reports resolved mode, effective surface, Gemini approval mode, and DeepSeek preset. If a requested custom mode is unavailable, it reports the Pi fallback and the reason.
+
+## Surface semantics
+
+### `replace`
+
+`replace` is the strict model-facing surface.
+
+- Codex suppresses native `edit`/`write` and exposes `apply_patch`.
+- Gemini suppresses native `edit`/`write` and exposes `replace`/`write_file`.
+- DeepSeek `standard` exposes its Harness-shaped `read`/`write`/`edit` family, plus `read_image` only for image-capable models.
+- DeepSeek `minimal` suppresses native `read`/`edit`/`write` and exposes only `str_replace_editor` from the managed filesystem families.
+
+If another extension reactivates a forbidden native tool, synchronization removes it again. `before_provider_request` independently applies the same roster restriction so stale tool definitions do not leak to the model.
+
+### `additive`
+
+`additive` is intentionally a hybrid surface, not an exact-upstream parity claim. Native and custom tools may coexist.
 
 ## Gemini semantics
 
-### replace_file_content
+### `replace`
 
-- `TargetContent` is exact by default.
-- `StartLine`/`EndLine` restrict the candidate range for LF, CRLF, and CR-only files.
-- zero matches fail.
-- multiple matches fail unless `AllowMultiple=true`.
-- replacement line endings follow the existing file.
+Model-facing parameters are:
 
-### multi_replace_file_content
+- `file_path`
+- `instruction`
+- `old_string`
+- `new_string`
+- optional `allow_multiple`
 
-All chunks are validated against one original snapshot. Overlapping chunks, ambiguous chunks, or any invalid chunk fail before a write occurs. Valid replacements are applied in memory from highest offset to lowest offset, followed by one file write.
+Replacement recovery follows this order:
 
-### write_to_file
+1. exact
+2. flexible whitespace/indentation recovery
+3. token-whitespace regex recovery
+4. bounded fuzzy recovery
+
+By default a replacement must resolve to one intended match. `allow_multiple=true` permits replacing all accepted matches. Existing file line endings are preserved.
+
+### `write_file`
+
+Model-facing parameters are exactly `file_path` and `content`.
 
 - missing target: create
-- existing target + `Overwrite` not true: reject
-- existing target + `Overwrite=true`: replace
+- existing target: overwrite
+- no hidden overwrite flag is required
+- omission placeholders such as `(rest of file unchanged)` are rejected because `content` must be complete
 
-All Gemini mutations use the same secure filesystem facade and mutation queue as the Codex implementation.
+Both Gemini mutation tools use the shared secure filesystem facade and file mutation queue.
 
+### Approval
+
+`gemini.approval` defaults to `ask_user`.
+
+- `ask_user`: every Gemini `replace`/`write_file` mutation requests interactive confirmation. A non-interactive session fails closed because approval cannot be obtained.
+- `auto_edit`: Gemini mutations execute without the extension-level confirmation prompt.
 
 ## DeepSeek semantics
 
-### Diff rendering
+### `standard` preset
 
-Codex, Gemini, and DeepSeek mutation tools expose their generated diff as call-body rows. This keeps edit previews compatible with tool-output display wrappers: collapsed views can cap the diff while expanded views can reveal the complete diff. DeepSeek `view` remains normal result output rather than a diff. Tool call headers also use a compact action + target form (for example `apply_patch A /index.php`, `replace_file_content M /index.php`, and `str_replace_editor M /index.php`), so the target remains visible when the outer UI appends `(ctrl + o to toggle)`.
+`standard` is the default preset. It installs DeepSeek Harness-shaped `read`, `write`, and `edit` definitions under those tool names.
 
-The `deepseek` mode does not use Pi's native `read`, `write`, or `edit` definitions. It overrides those names with a compatibility layer matching the current DeepSeek Harness filesystem contracts, while also exposing the standalone `str_replace_editor` surface:
+- `read(file_path, offset?, limit?)` returns Harness-style line windows and records the observation used by later guarded writes/edits.
+- `write(file_path, content)` creates or fully replaces UTF-8 text. Existing-file overwrite requires a current observation and uses stale-version/no-clobber checks.
+- `edit(file_path, old_string, new_string, replace_all?)` performs literal replacement with unique-match-by-default semantics and uses the same observation/version state.
+- `read_image(file_path)` is added only when the current model supports image input. It resolves the real target and refuses files outside the current workspace.
 
-- `read(file_path, offset?, limit?)` uses Harness-style line windows and records file observations.
-- `write(file_path, content)` creates or fully replaces UTF-8 text, requires a prior observation before overwriting an existing file, uses version/no-clobber guards, and publishes atomically.
-- `edit(file_path, old_string, new_string, replace_all?)` requires a prior observation, performs literal replacement with unique-match-by-default semantics, detects stale versions before generic edit matching, preserves existing line endings, and publishes atomically.
-- `str_replace_editor` requires an absolute `path`; `view`, `create`, `str_replace`, and `insert` share the same observation/version state as `read`/`write`/`edit`.
-- `str_replace_editor view` uses the Harness line-number format, 16,000-character clipping behavior, and directory traversal rules.
-- `str_replace` requires `old_str` to match exactly once and reports all duplicate-match line numbers; omit `new_str` to delete the match.
-- `insert` inserts `new_str` after the boundary represented by `insert_line` (`0` inserts before the first line).
-- Mode switches restore Pi's own `read`/`write`/`edit` definitions outside DeepSeek mode.
-- Pi-host compatibility is handled before `tool_call` guards: `prepareArguments` adds internal Pi aliases (`path`, plus `oldText`/`newText` and `edits[]` for edit) so guards written for Pi native mutation tools can inspect DeepSeek calls safely. The provider guard removes those aliases from the advertised schema, so the model still sees the exact DeepSeek Harness `write(file_path, content)` and `edit(file_path, old_string, new_string, replace_all?)` contracts.
+Observation/version state is scoped by both Pi session ID and workspace path. Two sessions in the same directory therefore do not share filesystem observations.
 
-## Tool ownership
+On `replace`, `str_replace_editor` is not exposed by the standard preset. On `additive`, it may coexist when available; that is explicitly hybrid behavior.
 
-The router owns only native `edit`/`write` instances it actually removed. If another extension or manual action reactivates a native tool, ownership is relinquished and repeated sync does not fight that activation.
+### `minimal` preset
 
-Explicit Pi tool filtering is respected. The package never resurrects a custom tool excluded from Pi's configured tool registry.
+`minimal` exposes `str_replace_editor` with `view`, `create`, `str_replace`, and `insert`.
+
+On the strict `replace` surface it suppresses the native `read`/`edit`/`write` family. `str_replace_editor` requires an absolute `path`.
+
+Directory `view` does not recurse through symlinked directories. This avoids traversal escaping through a symlink during recursive listing.
+
+### Shell guidance
+
+When `str_replace_editor` is active, provider-facing shell tool descriptions receive guidance telling the model not to mutate files through shell redirection, PowerShell write commands, `sed -i`, scripts, and similar mechanisms.
+
+This is guidance, not a security boundary. The extension does not claim that prompt text prevents a shell tool from mutating files. Filesystem containment and mutation checks must come from the actual filesystem/runtime controls.
+
+### Sandbox escalation fields
+
+DeepSeek write/edit wire schemas intentionally omit sandbox escalation fields when the active host filesystem backend does not expose the corresponding escalation capability. The extension does not advertise unsupported schema capabilities merely to mimic a wider upstream union.
+
+## Codex semantics
+
+`apply_patch` supports Add/Delete/Update/Move hunks and the secure filesystem policy implemented by the Codex engine.
+
+The constrained grammar also accepts an optional header immediately after `*** Begin Patch`:
+
+```text
+*** Environment ID: <id>
+```
+
+Pi currently exposes one workspace environment per invocation. The header is parsed for protocol compatibility and resolves to the current invocation environment; it is not a multi-environment selector in this host.
+
+For Google/Gemini providers explicitly overridden to Codex mode, `apply_patch` is represented as a compatibility function whose `input` string contains the raw `*** Begin Patch` ... `*** End Patch` payload.
 
 ## Provider guard
 
-At `before_provider_request`:
+Before each provider request, the extension treats the selected strict roster as final authority.
 
-- Codex mode strips Gemini/DeepSeek edit tools and validates/re-writes `apply_patch` compatibility transport.
-- Gemini mode strips `apply_patch`, DeepSeek tools, and stale excluded Gemini tools.
-- DeepSeek mode strips `apply_patch`, Gemini tools, and stale excluded DeepSeek tools, keeps the `write`/`edit` names active, and swaps `read`/`write`/`edit` to the Harness-compatible definitions on both replace and additive surfaces.
-- When `str_replace_editor` is active, DeepSeek mode also marks shell tools as non-mutating for file edits, preventing PowerShell/backtick and shell-redirection corruption; file mutations are directed through `write`, `edit`, or `str_replace_editor`.
-- Pi mode strips all managed custom edit tools.
-- OpenAI/Anthropic-style top-level tool arrays are handled.
-- Native Google `config.tools[].functionDeclarations[]` and `toolConfig.functionCallingConfig.allowedFunctionNames` are handled.
-- a forced forbidden tool choice fails closed.
+- Pi mode removes managed custom file-edit tools.
+- Codex mode removes Gemini and DeepSeek custom tools and validates `apply_patch` transport.
+- Gemini mode removes Codex, DeepSeek, deprecated Gemini aliases, and native `edit`/`write` on the strict surface.
+- DeepSeek `standard` strict mode removes Codex, Gemini, and `str_replace_editor`; it keeps the standard Harness filesystem family.
+- DeepSeek `minimal` strict mode removes Codex, Gemini, and native `read`/`edit`/`write`; it keeps `str_replace_editor`.
+- OpenAI/Anthropic-style top-level tool arrays and native Google `config.tools[].functionDeclarations[]` are handled.
+- Google `allowedFunctionNames` is pruned consistently.
+- A provider request that forces a now-forbidden tool fails closed.
+- Internal Pi compatibility aliases for DeepSeek `write`/`edit` are removed from the model-facing schemas.
 
-For native Google/Gemini models explicitly overridden to Codex mode, `apply_patch` is validated as an ordinary function declaration and its description is rewritten to the compatibility guidance that tells the model to put raw patch text in the `input` string.
+Deprecated Gemini names `replace_file_content`, `multi_replace_file_content`, and `write_to_file` are treated only as stale managed aliases and are removed from active/model-facing surfaces.
+
+## Diff rendering
+
+Codex, Gemini, and DeepSeek mutation tools expose generated diffs through the shared call-body renderer. Headers use compact action + target forms such as `apply_patch A /index.php`, `replace M /index.php`, and `str_replace_editor M /index.php`.
 
 ## Tests
 
 ```bash
-npm test
+pnpm test
 ```
 
-The included tests cover resolver precedence/detection, Pi-compatible `models.json` BOM/comment parsing, universal replace/additive mode transitions and ownership, Google provider wire guarding, DeepSeek Harness read/write/edit observation and stale-version behavior, shared `str_replace_editor` observation state, exact replacement/insert/view behavior, atomic/no-clobber concurrency, LF/CRLF handling, Gemini exact replacement behavior, model overrides, and settings migration/persistence.
+Coverage includes mode resolution, settings migration/persistence, strict/additive routing, provider wire filtering, Gemini schema/recovery/overwrite behavior, DeepSeek observation and stale-version semantics, session isolation, image containment, concurrency, `str_replace_editor`, Codex Environment ID grammar, and diff rendering.
+
+Two filesystem parity tests are skipped on platforms where the required POSIX mode/symlink behavior cannot be exercised by the current test environment.
