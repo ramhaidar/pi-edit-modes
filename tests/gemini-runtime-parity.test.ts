@@ -18,6 +18,7 @@ import {
 } from "../src/tools/gemini/upstream-parity.ts";
 import {
   hasGeminiBlockedPathSegment,
+  validateGeminiWorkspacePath,
   validateGeminiPath,
 } from "../src/tools/gemini/workspace-access.ts";
 
@@ -37,6 +38,14 @@ function firstText(result: any): string {
 function sessionScope(cwd: string, id: string) {
   return { cwd, sessionManager: { getSessionId: () => id } };
 }
+
+test("Gemini tools rely on upstream-shaped declarations without standalone Pi prompt guidance", () => {
+  for (const name of ["replace", "write_file"]) {
+    const definition = tool(name);
+    assert.equal(Object.hasOwn(definition, "promptSnippet"), false);
+    assert.equal(Object.hasOwn(definition, "promptGuidelines"), false);
+  }
+});
 
 test("Gemini replace creates a missing file only with empty old_string", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-create-"));
@@ -314,6 +323,114 @@ test("Gemini replace corrects a unique missing relative suffix within the worksp
       { cwd },
     );
     assert.equal(await readFile(target, "utf8"), "const value = 2;\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Gemini relative-path correction respects .gitignore discovery filtering", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-correct-gitignore-"));
+  try {
+    await mkdir(join(cwd, ".git"));
+    await mkdir(join(cwd, "src"));
+    await mkdir(join(cwd, "generated"));
+    await writeFile(join(cwd, ".gitignore"), "generated/\n", "utf8");
+    await writeFile(join(cwd, "src", "foo.ts"), "old\n", "utf8");
+    await writeFile(join(cwd, "generated", "foo.ts"), "generated old\n", "utf8");
+
+    await tool("replace").execute(
+      "gitignore-correction",
+      {
+        file_path: "foo.ts",
+        instruction: "Update foo",
+        old_string: "old",
+        new_string: "new",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd },
+    );
+
+    assert.equal(await readFile(join(cwd, "src", "foo.ts"), "utf8"), "new\n");
+    assert.equal(await readFile(join(cwd, "generated", "foo.ts"), "utf8"), "generated old\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Gemini relative-path correction respects .geminiignore and nested .gitignore files", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-correct-ignore-stack-"));
+  try {
+    await mkdir(join(cwd, ".git"));
+    await mkdir(join(cwd, "src"));
+    await mkdir(join(cwd, "ignored-by-gemini"));
+    await mkdir(join(cwd, "nested"));
+    await mkdir(join(cwd, "nested", "ignored"));
+    await writeFile(join(cwd, ".geminiignore"), "ignored-by-gemini/\n", "utf8");
+    await writeFile(join(cwd, "nested", ".gitignore"), "ignored/\n", "utf8");
+    await writeFile(join(cwd, "src", "foo.ts"), "old\n", "utf8");
+    await writeFile(join(cwd, "ignored-by-gemini", "foo.ts"), "gemini ignored\n", "utf8");
+    await writeFile(join(cwd, "nested", "ignored", "foo.ts"), "git ignored\n", "utf8");
+
+    await tool("replace").execute(
+      "ignore-stack-correction",
+      {
+        file_path: "foo.ts",
+        instruction: "Update foo",
+        old_string: "old",
+        new_string: "new",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd },
+    );
+
+    assert.equal(await readFile(join(cwd, "src", "foo.ts"), "utf8"), "new\n");
+    assert.equal(
+      await readFile(join(cwd, "ignored-by-gemini", "foo.ts"), "utf8"),
+      "gemini ignored\n",
+    );
+    assert.equal(await readFile(join(cwd, "nested", "ignored", "foo.ts"), "utf8"), "git ignored\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Gemini relative-path correction honors configurable ignore toggles and custom ignore files", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-correct-configurable-ignore-"));
+  try {
+    await mkdir(join(cwd, ".git"));
+    await mkdir(join(cwd, "src"));
+    await mkdir(join(cwd, "generated"));
+    await mkdir(join(cwd, "custom"));
+    await writeFile(join(cwd, ".gitignore"), "generated/\n", "utf8");
+    await writeFile(join(cwd, ".customignore"), "custom/\n", "utf8");
+    await writeFile(join(cwd, "src", "foo.ts"), "src\n", "utf8");
+    await writeFile(join(cwd, "generated", "foo.ts"), "generated\n", "utf8");
+    await writeFile(join(cwd, "custom", "foo.ts"), "custom\n", "utf8");
+
+    await assert.rejects(
+      () =>
+        validateGeminiWorkspacePath(cwd, "foo.ts", {
+          correctRelative: true,
+          fileFiltering: {
+            respectGitIgnore: false,
+            respectGeminiIgnore: true,
+            customIgnoreFilePaths: [".customignore"],
+          },
+        }),
+      /ambiguous and matches multiple files/i,
+    );
+
+    const corrected = await validateGeminiWorkspacePath(cwd, "foo.ts", {
+      correctRelative: true,
+      fileFiltering: {
+        respectGitIgnore: true,
+        respectGeminiIgnore: true,
+        customIgnoreFilePaths: [".customignore"],
+      },
+    });
+    assert.equal(corrected, join(cwd, "src", "foo.ts"));
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

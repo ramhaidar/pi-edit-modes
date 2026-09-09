@@ -33,6 +33,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "ignore": "^7.0.8",
     "koffi": "^3.1.0"
   },
   "devDependencies": {

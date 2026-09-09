@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  GeminiDiscoveryIgnoreFilter,
+  type GeminiDiscoveryIgnoreOptions,
+} from "./discovery-ignore.ts";
 
 function isMissing(error: unknown): boolean {
   return (
@@ -175,6 +179,7 @@ export class GeminiPathCorrectionError extends Error {
 async function correctGeminiRelativePath(
   workspace: string,
   filePath: string,
+  fileFiltering: GeminiDiscoveryIgnoreOptions,
 ): Promise<string | undefined> {
   const sanitizedPath = resolveDefensiveToolPath(filePath, workspace);
   const directPath = join(workspace, sanitizedPath);
@@ -184,6 +189,7 @@ async function correctGeminiRelativePath(
   const normalizedTarget = sanitizedPath.replace(/\\/g, "/");
   const foundFiles: string[] = [];
   const queue = [workspace];
+  const ignoreFilter = new GeminiDiscoveryIgnoreFilter(workspace, fileFiltering);
   let visitedDirs = 0;
 
   while (queue.length > 0 && visitedDirs < 50) {
@@ -198,10 +204,16 @@ async function correctGeminiRelativePath(
     for (const entry of entries) {
       const fullPath = join(current, entry.name);
       if (entry.isDirectory()) {
-        if (!hasGeminiBlockedPathSegment(entry.name)) queue.push(fullPath);
+        if (
+          !hasGeminiBlockedPathSegment(entry.name) &&
+          !ignoreFilter.shouldIgnore(fullPath, true)
+        ) {
+          queue.push(fullPath);
+        }
         continue;
       }
       if (!entry.isFile() || entry.name !== targetBasename) continue;
+      if (ignoreFilter.shouldIgnore(fullPath, false)) continue;
       const normalized = fullPath.replace(/\\/g, "/");
       if (normalized.endsWith(normalizedTarget)) foundFiles.push(fullPath);
     }
@@ -219,12 +231,15 @@ async function correctGeminiRelativePath(
 export async function validateGeminiWorkspacePath(
   cwd: string,
   filePath: string,
-  options: { correctRelative?: boolean } = {},
+  options: {
+    correctRelative?: boolean;
+    fileFiltering?: GeminiDiscoveryIgnoreOptions;
+  } = {},
 ): Promise<string> {
   const workspace = resolve(cwd);
   const correctedPath =
     options.correctRelative && !isAbsolute(filePath)
-      ? await correctGeminiRelativePath(workspace, filePath)
+      ? await correctGeminiRelativePath(workspace, filePath, options.fileFiltering ?? {})
       : undefined;
   const sanitizedPath = correctedPath ?? resolveDefensiveToolPath(filePath, workspace);
   const decodedPath = decodePathReference(sanitizedPath);

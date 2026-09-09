@@ -15,7 +15,7 @@ const DEFAULT_MODES: EditModesSettings["defaultMode"][] = ["pi", "gemini", "code
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
 const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
-const SAVE_ROW = 11;
+const SAVE_ROW = 13;
 
 const ROW_DESCRIPTIONS: readonly string[] = [
   "Tool mode for this session only ('auto' follows the active model). Session-only: it does not change saved settings.",
@@ -28,6 +28,8 @@ const ROW_DESCRIPTIONS: readonly string[] = [
   "Automatically use DeepSeek tools whenever the active model is a DeepSeek model.",
   "'ask_user' asks for confirmation before Gemini edits or writes files; 'auto_edit' lets Gemini apply changes without asking.",
   "When On, Gemini can retry failed file edits on its own. Turn Off to fail fast instead of auto-correcting.",
+  "When On, Gemini relative-path fallback discovery respects .gitignore and .git/info/exclude rules.",
+  "When On, Gemini relative-path fallback discovery respects .geminiignore. Custom ignore files remain configurable in edit-modes.json.",
   "DeepSeek tool/prompt profile: 'standard' is the full setup, 'minimal' is a lighter, lower-token setup.",
   "Write all changed values to edit-modes.json and close this dialog. Esc closes without saving.",
 ];
@@ -116,6 +118,14 @@ export class SettingsDialog {
         label: "Gemini LLM correction",
         value: this.draft.settings.gemini.disableLLMCorrection ? "Off" : "On",
       },
+      {
+        label: "Gemini respect .gitignore",
+        value: this.draft.settings.gemini.fileFiltering.respectGitIgnore ? "On" : "Off",
+      },
+      {
+        label: "Gemini respect .geminiignore",
+        value: this.draft.settings.gemini.fileFiltering.respectGeminiIgnore ? "On" : "Off",
+      },
       { label: "DeepSeek preset", value: this.draft.settings.deepseek.preset },
       { label: "Save settings", value: "" },
     ];
@@ -167,6 +177,14 @@ export class SettingsDialog {
           !this.draft.settings.gemini.disableLLMCorrection;
         break;
       case 10:
+        this.draft.settings.gemini.fileFiltering.respectGitIgnore =
+          !this.draft.settings.gemini.fileFiltering.respectGitIgnore;
+        break;
+      case 11:
+        this.draft.settings.gemini.fileFiltering.respectGeminiIgnore =
+          !this.draft.settings.gemini.fileFiltering.respectGeminiIgnore;
+        break;
+      case 12:
         this.draft.settings.deepseek.preset = cycle(
           DEEPSEEK_PRESETS,
           this.draft.settings.deepseek.preset,

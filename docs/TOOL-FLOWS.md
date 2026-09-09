@@ -60,7 +60,9 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 
 Before proposal calculation, Gemini also applies Gemini-style defensive path normalization: null bytes are stripped, accidental `@` reference prefixes are normalized when appropriate, URI/file-URL input is decoded, and existing symlink ancestors are canonicalized. Relative parent escapes, absolute paths outside the workspace, canonical targets outside the workspace, and blocked sensitive segments (`.git`, `.env`, `node_modules`, `gha-creds-*.json`, including upstream case/NTFS alias handling) are rejected as `PATH_NOT_IN_WORKSPACE`; safe in-workspace symlinks resolve to their canonical in-workspace target. Blocking happens before file reads and optional correction-model calls. Execution repeats validation before the mutation and again immediately before commit.
 
-Resolved model-generated paths also use Gemini CLI's generic preflight checks for control characters, common log/error fragments, suspicious long quote/ellipsis forms, the 4096-character path limit, and the 255-character component limit. Relative `replace` targets additionally use a bounded 50-directory suffix/basename search when the direct path is missing; a unique match is corrected and ambiguous matches are rejected.
+Resolved model-generated paths also use Gemini CLI's generic preflight checks for control characters, common log/error fragments, suspicious long quote/ellipsis forms, the 4096-character path limit, and the 255-character component limit. Relative `replace` targets additionally use a bounded 50-directory suffix/basename search when the direct path is missing. That fallback discovery respects `.gitignore` (including nested ignore files in Git workspaces) and root `.geminiignore` by default; `gemini.fileFiltering` can disable either ignore family and add `customIgnoreFilePaths`. A unique visible match is corrected and ambiguous visible matches are rejected.
+
+Pi currently exposes a single workspace root (`ctx.cwd`) to this extension, so fallback correction searches that root only. Gemini CLI can search every configured `WorkspaceContext` directory in multi-root sessions; this remains a host-architecture divergence until Pi exposes an equivalent multi-root workspace API.
 
 The race guarantee depends on the shared filesystem backend. Descriptor/openat-backed secure implementations prevent symlink redirection between validation and commit. The portable Node fallback is intentionally best-effort and retains a path-based TOCTOU window between its checks and write; `PI_APPLY_PATCH_REQUIRE_SECURE_FS=1` makes the host fail closed when that secure backend is unavailable.
 
@@ -80,6 +82,8 @@ Successful `replace` and `write_file` results sent back to the model include a b
 Gemini CLI also appends newly discovered subdirectory project context after successful high-intent file operations. Pi loads its own trusted project context files (`AGENTS.override.md`, `AGENTS.md`, or `CLAUDE.md`) through the host resource loader, but `ExtensionContext` does not expose Gemini CLI's memory-context manager or an equivalent trusted JIT subdirectory discovery service.
 
 `pi-edit-modes` therefore does not independently scan or read extra context files after a mutation, because doing so would bypass Pi's resource/trust policy. This remains an explicit host-context lifecycle divergence.
+
+The Gemini tool registrations also avoid Pi-only `promptSnippet` / `promptGuidelines`; tool-specific model conditioning comes from the upstream-shaped tool declaration description and parameter schema.
 
 ## DeepSeek semantics
 

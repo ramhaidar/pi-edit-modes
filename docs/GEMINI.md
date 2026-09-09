@@ -6,7 +6,7 @@ Gemini mode exposes the current `replace` and `write_file` surface. Strict `repl
 
 Parameters: `file_path`, `instruction`, `old_string`, `new_string`, optional `allow_multiple`.
 
-Recovery order is exact -> flexible whitespace/indentation -> token-whitespace regex -> bounded fuzzy. For a missing relative `replace` path, the tool first checks the direct path and then performs a bounded workspace search (up to 50 directories) for a unique matching suffix/basename. Ambiguous matches are rejected instead of selecting one arbitrarily. Empty `old_string` creates a missing file but is rejected for an existing file. Existing line endings are preserved; new files use host OS line endings.
+Recovery order is exact -> flexible whitespace/indentation -> token-whitespace regex -> bounded fuzzy. For a missing relative `replace` path, the tool first checks the direct path and then performs a bounded workspace search (up to 50 directories) for a unique matching suffix/basename. Fallback discovery respects `.gitignore` (including nested ignore files when the workspace is in a Git repository) and root `.geminiignore` by default, so ignored duplicates do not create false ambiguity. `gemini.fileFiltering` can independently disable Git/Gemini ignore handling and add `customIgnoreFilePaths`, matching Gemini CLI's optional filtering controls. Ambiguous visible matches are rejected instead of selecting one arbitrarily. Empty `old_string` creates a missing file but is rejected for an existing file. Existing line endings are preserved; new files use host OS line endings.
 
 Omission placeholders are rejected unless the same normalized placeholder already exists in `old_string`. Fuzzy recovery reports 1-based match line ranges to the model.
 
@@ -38,6 +38,8 @@ Validation runs before proposal calculation, again when execution starts, and im
 
 Provider dispatch rewrites tool and parameter descriptions to the active Gemini model-family contract. Deprecated aliases are stripped.
 
-Gemini CLI's trusted JIT subdirectory context discovery is not reproduced because Pi does not expose an equivalent extension-facing trusted context service; Pi's host resource loader remains authoritative.
+`replace` and `write_file` do not add Pi-only `promptSnippet` or `promptGuidelines`; tool-specific model conditioning comes from the upstream-shaped declaration description/schema.
+
+Gemini CLI's trusted JIT subdirectory context discovery is not reproduced because Pi does not expose an equivalent extension-facing trusted context service; Pi's host resource loader remains authoritative. Pi currently exposes one workspace root to this extension, so relative-path correction searches `ctx.cwd`; Gemini CLI can search every root in `WorkspaceContext.getDirectories()` for multi-root sessions.
 
 For complete details see [Tool flows and parity](TOOL-FLOWS.md), [Configuration](CONFIGURATION.md), and [Development](DEVELOPMENT.md).

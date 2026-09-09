@@ -29,7 +29,7 @@ Runtime controls are `/tool-mode` and `/tool-surface`; the deprecated `/apply-pa
 
 ### Gemini
 
-`replace` supports create-via-empty-`old_string`, exact/flexible/regex/fuzzy recovery, optional bounded LLM correction, omission protection, whole-proposal approval modification, session/workspace-scoped prepared mutations, stale-preimage checks, updated-code result context, bounded relative-path correction, Gemini-style defensive/generic path validation, sensitive-path blocking, and a workspace fence that rejects canonical escapes. `write_file` creates or overwrites complete content through the same mutation path and boundary.
+`replace` supports create-via-empty-`old_string`, exact/flexible/regex/fuzzy recovery, optional bounded LLM correction, omission protection, whole-proposal approval modification, session/workspace-scoped prepared mutations, stale-preimage checks, updated-code result context, configurable ignore-aware bounded relative-path correction, Gemini-style defensive/generic path validation, sensitive-path blocking, and a workspace fence that rejects canonical escapes. `write_file` creates or overwrites complete content through the same mutation path and boundary.
 
 See [Gemini mode](docs/GEMINI.md) for the focused contract and [Tool flows and parity](docs/TOOL-FLOWS.md) for shared runtime/provider behavior.
 

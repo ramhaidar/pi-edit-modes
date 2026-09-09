@@ -11,6 +11,7 @@ import {
   normalizeNewFileLineEndings,
   validateGeminiOmissionPlaceholders,
 } from "./upstream-parity.ts";
+import type { GeminiDiscoveryIgnoreOptions } from "./discovery-ignore.ts";
 import { validateGeminiWorkspacePath } from "./workspace-access.ts";
 
 export type GeminiMutationToolName = "replace" | "write_file";
@@ -216,13 +217,17 @@ export async function calculateGeminiMutation(
   params: Record<string, unknown>,
   ctx: any,
   signal?: AbortSignal,
-  options: { disableLLMCorrection?: boolean } = {},
+  options: {
+    disableLLMCorrection?: boolean;
+    fileFiltering?: GeminiDiscoveryIgnoreOptions;
+  } = {},
 ): Promise<PreparedGeminiMutation> {
   const disableLLMCorrection = options.disableLLMCorrection ?? true;
   const filePath = typeof params.file_path === "string" ? params.file_path : "";
   if (!filePath) throw new Error("file_path must be a non-empty string");
   const absolutePath = await validateGeminiWorkspacePath(ctx.cwd, filePath, {
     correctRelative: toolName === "replace",
+    fileFiltering: options.fileFiltering,
   });
   return withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
     const before = await fs.readFileOptional(absolutePath, signal);
@@ -416,6 +421,7 @@ export async function handleGeminiToolCall(
   ctx: any,
   approval: "ask_user" | "auto_edit",
   disableLLMCorrection = true,
+  fileFiltering?: GeminiDiscoveryIgnoreOptions,
 ): Promise<{ block: true; reason: string } | undefined> {
   if (event?.toolName !== "replace" && event?.toolName !== "write_file") return;
   if (!event.input || typeof event.input !== "object") return;
@@ -427,7 +433,7 @@ export async function handleGeminiToolCall(
       event.input,
       ctx,
       ctx.signal,
-      { disableLLMCorrection },
+      { disableLLMCorrection, fileFiltering },
     );
   } catch (error) {
     if (error instanceof GeminiEditNoChangeError) {

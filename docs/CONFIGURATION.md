@@ -37,7 +37,12 @@ Settings are stored in `~/.pi/agent/edit-modes.json`:
   },
   "gemini": {
     "approval": "ask_user",
-    "disableLLMCorrection": true
+    "disableLLMCorrection": true,
+    "fileFiltering": {
+      "respectGitIgnore": true,
+      "respectGeminiIgnore": true,
+      "customIgnoreFilePaths": []
+    }
   },
   "deepseek": {
     "preset": "standard"
@@ -48,6 +53,9 @@ Settings are stored in `~/.pi/agent/edit-modes.json`:
 - `surface`: `replace` or `additive`.
 - `gemini.approval`: `ask_user` or `auto_edit`.
 - `gemini.disableLLMCorrection`: boolean, default `true`, matching current Gemini CLI's correction default.
+- `gemini.fileFiltering.respectGitIgnore`: boolean, default `true`. Controls whether Gemini `replace` fallback path discovery respects `.gitignore` and `.git/info/exclude`.
+- `gemini.fileFiltering.respectGeminiIgnore`: boolean, default `true`. Controls whether fallback discovery respects `.geminiignore`.
+- `gemini.fileFiltering.customIgnoreFilePaths`: array of ignore-file paths, default `[]`. These files participate in fallback discovery filtering. This arbitrary path list is configured in JSON rather than the settings overlay.
 - `deepseek.preset`: `standard` or `minimal`.
 
 The legacy `codex.surface` setting is accepted as a migration fallback. The legacy `gemini.strictExactMatch` boolean is also accepted so older settings files still load, but it is no longer projected into current Gemini behavior.
@@ -98,4 +106,4 @@ The package reads raw `models.json`, strips UTF-8 BOM/comments using Pi-compatib
 - `/tool-surface auto|replace|additive` changes the runtime session surface override.
 - `/apply-patch-mode replace|additive|off` is a deprecated compatibility alias.
 
-The overlay reports resolved mode, effective surface, Gemini approval mode, and DeepSeek preset. If a requested custom mode is unavailable, it reports the Pi fallback and the reason.
+The overlay reports resolved mode, effective surface, Gemini approval mode, Gemini `.gitignore`/`.geminiignore` discovery toggles, and DeepSeek preset. If a requested custom mode is unavailable, it reports the Pi fallback and the reason.

@@ -349,7 +349,13 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (currentResolution.mode !== "gemini") return;
     const gemini = store.snapshot().settings.gemini;
-    return handleGeminiToolCall(event, ctx, gemini.approval, gemini.disableLLMCorrection);
+    return handleGeminiToolCall(
+      event,
+      ctx,
+      gemini.approval,
+      gemini.disableLLMCorrection,
+      gemini.fileFiltering,
+    );
   });
 
   pi.registerCommand("tool-mode", {

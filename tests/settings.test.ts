@@ -26,13 +26,43 @@ test("valid partial config merges with defaults", () => {
   assert.equal(parsed.settings.autoDiscovery.deepseek, true);
   assert.equal(parsed.settings.gemini.approval, "ask_user");
   assert.equal(parsed.settings.gemini.disableLLMCorrection, true);
+  assert.deepEqual(parsed.settings.gemini.fileFiltering, {
+    respectGitIgnore: true,
+    respectGeminiIgnore: true,
+    customIgnoreFilePaths: [],
+  });
   assert.equal(parsed.settings.deepseek.preset, "standard");
 });
 
 test("legacy gemini.strictExactMatch is accepted but no longer projected", () => {
   const parsed = parseSettings({ version: 1, gemini: { strictExactMatch: false } });
   assert.equal(parsed.warning, undefined);
-  assert.deepEqual(parsed.settings.gemini, { approval: "ask_user", disableLLMCorrection: true });
+  assert.deepEqual(parsed.settings.gemini, DEFAULT_SETTINGS.gemini);
+});
+
+test("Gemini file filtering settings match upstream defaults and custom configuration", () => {
+  const parsed = parseSettings({
+    version: 1,
+    gemini: {
+      fileFiltering: {
+        respectGitIgnore: false,
+        respectGeminiIgnore: false,
+        customIgnoreFilePaths: [".aiignore", "config/private.ignore"],
+      },
+    },
+  });
+  assert.equal(parsed.warning, undefined);
+  assert.deepEqual(parsed.settings.gemini.fileFiltering, {
+    respectGitIgnore: false,
+    respectGeminiIgnore: false,
+    customIgnoreFilePaths: [".aiignore", "config/private.ignore"],
+  });
+
+  const invalid = parseSettings({
+    version: 1,
+    gemini: { fileFiltering: { customIgnoreFilePaths: [".aiignore", 42] } },
+  });
+  assert.match(invalid.warning ?? "", /customIgnoreFilePaths must be an array of strings/);
 });
 
 test("legacy codex.surface migrates to universal surface", () => {
@@ -50,6 +80,8 @@ test("settings store persists JSON and reloads it", async () => {
     settings.surface = "additive";
     settings.gemini.approval = "auto_edit";
     settings.gemini.disableLLMCorrection = false;
+    settings.gemini.fileFiltering.respectGitIgnore = false;
+    settings.gemini.fileFiltering.customIgnoreFilePaths = [".customignore"];
     settings.deepseek.preset = "minimal";
     await store.save(settings);
     const raw = await readFile(join(dir, "edit-modes.json"), "utf8");
@@ -59,6 +91,8 @@ test("settings store persists JSON and reloads it", async () => {
     assert.equal(snap.settings.surface, "additive");
     assert.equal(snap.settings.gemini.approval, "auto_edit");
     assert.equal(snap.settings.gemini.disableLLMCorrection, false);
+    assert.equal(snap.settings.gemini.fileFiltering.respectGitIgnore, false);
+    assert.deepEqual(snap.settings.gemini.fileFiltering.customIgnoreFilePaths, [".customignore"]);
     assert.equal(snap.settings.deepseek.preset, "minimal");
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -20,6 +20,11 @@ export interface EditModesSettings {
   gemini: {
     approval: GeminiApprovalMode;
     disableLLMCorrection: boolean;
+    fileFiltering: {
+      respectGitIgnore: boolean;
+      respectGeminiIgnore: boolean;
+      customIgnoreFilePaths: string[];
+    };
   };
   deepseek: {
     preset: DeepSeekPreset;

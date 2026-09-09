@@ -11,7 +11,15 @@ export const DEFAULT_SETTINGS: EditModesSettings = {
   defaultMode: "pi",
   surface: "replace",
   autoDiscovery: { enabled: true, gemini: true, codex: true, deepseek: true },
-  gemini: { approval: "ask_user", disableLLMCorrection: true },
+  gemini: {
+    approval: "ask_user",
+    disableLLMCorrection: true,
+    fileFiltering: {
+      respectGitIgnore: true,
+      respectGeminiIgnore: true,
+      customIgnoreFilePaths: [],
+    },
+  },
   deepseek: { preset: "standard" },
 };
 
@@ -60,6 +68,15 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
     const auto = section("autoDiscovery") ?? {};
     const legacyCodex = section("codex") ?? {};
     const gemini = section("gemini") ?? {};
+    const geminiFileFiltering =
+      gemini.fileFiltering === undefined
+        ? {}
+        : gemini.fileFiltering &&
+            typeof gemini.fileFiltering === "object" &&
+            !Array.isArray(gemini.fileFiltering)
+          ? (gemini.fileFiltering as Record<string, unknown>)
+          : null;
+    if (geminiFileFiltering === null) return fallback("gemini.fileFiltering must be an object.");
     const deepseek = section("deepseek") ?? {};
     for (const key of ["enabled", "gemini", "codex", "deepseek"] as const) {
       if (auto[key] !== undefined && typeof auto[key] !== "boolean")
@@ -76,6 +93,16 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
       typeof gemini.disableLLMCorrection !== "boolean"
     )
       return fallback("gemini.disableLLMCorrection must be boolean.");
+    for (const key of ["respectGitIgnore", "respectGeminiIgnore"] as const) {
+      if (geminiFileFiltering[key] !== undefined && typeof geminiFileFiltering[key] !== "boolean")
+        return fallback(`gemini.fileFiltering.${key} must be boolean.`);
+    }
+    if (
+      geminiFileFiltering.customIgnoreFilePaths !== undefined &&
+      (!Array.isArray(geminiFileFiltering.customIgnoreFilePaths) ||
+        !geminiFileFiltering.customIgnoreFilePaths.every((value) => typeof value === "string"))
+    )
+      return fallback("gemini.fileFiltering.customIgnoreFilePaths must be an array of strings.");
     // v0.1.x exposed strictExactMatch. Accept the legacy boolean so old settings
     // files continue loading, but intentionally do not project it into the current
     // Gemini CLI-compatible replacement behavior.
@@ -121,6 +148,19 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
             typeof gemini.disableLLMCorrection === "boolean"
               ? gemini.disableLLMCorrection
               : DEFAULT_SETTINGS.gemini.disableLLMCorrection,
+          fileFiltering: {
+            respectGitIgnore:
+              typeof geminiFileFiltering.respectGitIgnore === "boolean"
+                ? geminiFileFiltering.respectGitIgnore
+                : DEFAULT_SETTINGS.gemini.fileFiltering.respectGitIgnore,
+            respectGeminiIgnore:
+              typeof geminiFileFiltering.respectGeminiIgnore === "boolean"
+                ? geminiFileFiltering.respectGeminiIgnore
+                : DEFAULT_SETTINGS.gemini.fileFiltering.respectGeminiIgnore,
+            customIgnoreFilePaths: Array.isArray(geminiFileFiltering.customIgnoreFilePaths)
+              ? [...geminiFileFiltering.customIgnoreFilePaths]
+              : [...DEFAULT_SETTINGS.gemini.fileFiltering.customIgnoreFilePaths],
+          },
         },
         deepseek: {
           preset: isDeepSeekPreset(deepseek.preset)
