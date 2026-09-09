@@ -776,19 +776,24 @@ export class DeepSeekFsParity {
     oldString: string | undefined,
     newString: string | undefined,
     signal?: AbortSignal,
+    options: { requireObservation?: boolean } = {},
   ): Promise<{ path: string; before: string; after: string }> {
     const target = await this.target(path);
-    // Match str_replace_editor ordering: edit-intent runs before required old_str
-    // validation and before stat/read of the file.
-    const observed = this.observations.get(target.targetKey);
-    if (!observed)
-      throw new DeepSeekFsError(
-        `edit requires reading "${target.displayPath}" first`,
-        "FS_NOT_OBSERVED",
-      );
-    if (observed.kind === "absent")
-      throw new DeepSeekFsError(`cannot edit "${target.displayPath}": not found`, "FS_NOT_FOUND");
-    const expectedVersion = observed.version;
+    const requireObservation = options.requireObservation ?? true;
+    let observedVersion: string | undefined;
+    if (requireObservation) {
+      // Match str_replace_editor + fs-observation-policy composition: edit-intent
+      // runs before required old_str validation and before stat/read of the file.
+      const observed = this.observations.get(target.targetKey);
+      if (!observed)
+        throw new DeepSeekFsError(
+          `edit requires reading "${target.displayPath}" first`,
+          "FS_NOT_OBSERVED",
+        );
+      if (observed.kind === "absent")
+        throw new DeepSeekFsError(`cannot edit "${target.displayPath}": not found`, "FS_NOT_FOUND");
+      observedVersion = observed.version;
+    }
     if (oldString === undefined)
       throw new Error("Parameter `old_str` is required for command: str_replace");
     if (oldString.length === 0)
@@ -814,6 +819,7 @@ export class DeepSeekFsParity {
         `cannot edit "${target.displayPath}": not a regular file`,
         "FS_NOT_REGULAR_FILE",
       );
+    const expectedVersion = observedVersion ?? info.version;
     const bytes = await readRaw(target.targetKey, signal);
     if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
       throw new DeepSeekFsError(`cannot read "${target.displayPath}": binary file`, "FS_NOT_TEXT");
@@ -882,17 +888,22 @@ export class DeepSeekFsParity {
     insertLine: number,
     newString: string,
     signal?: AbortSignal,
+    options: { requireObservation?: boolean } = {},
   ): Promise<{ path: string; before: string; after: string }> {
     const target = await this.target(path);
-    const observed = this.observations.get(target.targetKey);
-    if (!observed)
-      throw new DeepSeekFsError(
-        `edit requires reading "${target.displayPath}" first`,
-        "FS_NOT_OBSERVED",
-      );
-    if (observed.kind === "absent")
-      throw new DeepSeekFsError(`cannot edit "${target.displayPath}": not found`, "FS_NOT_FOUND");
-    const expectedVersion = observed.version;
+    const requireObservation = options.requireObservation ?? true;
+    let observedVersion: string | undefined;
+    if (requireObservation) {
+      const observed = this.observations.get(target.targetKey);
+      if (!observed)
+        throw new DeepSeekFsError(
+          `edit requires reading "${target.displayPath}" first`,
+          "FS_NOT_OBSERVED",
+        );
+      if (observed.kind === "absent")
+        throw new DeepSeekFsError(`cannot edit "${target.displayPath}": not found`, "FS_NOT_FOUND");
+      observedVersion = observed.version;
+    }
 
     const info = await probe(target.targetKey);
     if (!info) {
@@ -913,6 +924,7 @@ export class DeepSeekFsParity {
         `cannot insert into "${target.displayPath}": not a regular file`,
         "FS_NOT_REGULAR_FILE",
       );
+    const expectedVersion = observedVersion ?? info.version;
     const bytes = await readRaw(target.targetKey, signal);
     if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
       throw new DeepSeekFsError(`cannot read "${target.displayPath}": binary file`, "FS_NOT_TEXT");

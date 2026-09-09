@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerDeepSeekFilesystemTools } from "../src/tools/deepseek/fs-tools.ts";
@@ -14,6 +14,12 @@ function tools(): any[] {
   return values;
 }
 
+function minimalTool(): any {
+  const values: any[] = [];
+  registerDeepSeekTool({ registerTool: (value: any) => values.push(value) } as any);
+  return values.find((value) => value.name === "str_replace_editor");
+}
+
 test("DeepSeek mutations are sequential while read stays parallel", () => {
   const values = tools();
   assert.equal(values.find((value) => value.name === "read")?.executionMode, "parallel");
@@ -21,14 +27,47 @@ test("DeepSeek mutations are sequential while read stays parallel", () => {
   assert.equal(values.find((value) => value.name === "edit")?.executionMode, "sequential");
 });
 
-test("DeepSeek minimal str_replace_editor is sequential and does not advertise unavailable write/edit", () => {
-  const values: any[] = [];
-  registerDeepSeekTool({ registerTool: (value: any) => values.push(value) } as any);
-  const editor = values.find((value) => value.name === "str_replace_editor");
+test("DeepSeek minimal str_replace_editor is sequential and adds no standalone prompt", () => {
+  const editor = minimalTool();
   assert.equal(editor?.executionMode, "sequential");
-  assert.match(editor?.promptSnippet ?? "", /str_replace_editor/);
-  assert.doesNotMatch(editor?.promptSnippet ?? "", /Use write|edit for targeted/);
-  assert.doesNotMatch((editor?.promptGuidelines ?? []).join("\n"), /use write, edit, or/i);
+  assert.equal(editor?.promptSnippet, undefined);
+  assert.equal(editor?.promptGuidelines, undefined);
+});
+
+test("DeepSeek shipped minimal editor mutates current files without a prior view", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-deepseek-minimal-no-observation-"));
+  try {
+    const replacePath = join(cwd, "replace.txt");
+    const insertPath = join(cwd, "insert.txt");
+    await writeFile(replacePath, "alpha\n", "utf8");
+    await writeFile(insertPath, "one\ntwo\n", "utf8");
+    const editor = minimalTool();
+    const ctx = {
+      cwd,
+      sessionManager: { getSessionId: () => "minimal-no-observation" },
+    };
+
+    await editor.execute(
+      "minimal-replace",
+      { command: "str_replace", path: replacePath, old_str: "alpha", new_str: "beta" },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+    assert.equal(await readFile(replacePath, "utf8"), "beta\n");
+
+    await editor.execute(
+      "minimal-insert",
+      { command: "insert", path: insertPath, insert_line: 1, new_str: "middle" },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+    assert.equal(await readFile(insertPath, "utf8"), "one\nmiddle\ntwo\n");
+  } finally {
+    clearDeepSeekFsRuntimes();
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test("DeepSeek minimal directory markers match Harness for symlinks and other entries", () => {

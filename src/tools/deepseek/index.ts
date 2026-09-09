@@ -174,14 +174,6 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
     name: DEEPSEEK_TOOL_NAME,
     label: DEEPSEEK_TOOL_NAME,
     description: DEFAULT_DESCRIPTION,
-    promptSnippet:
-      "Use str_replace_editor for file viewing, creation, exact replacement, and insertion. Do not edit files through bash, PowerShell, shell redirection, scripts, or inline shell commands.",
-    promptGuidelines: [
-      "Use view before editing when you need exact file context.",
-      "old_str must be an exact unique match for str_replace.",
-      "create refuses to overwrite an existing file.",
-      "For file mutations, use str_replace_editor instead of bash/PowerShell/shell commands; shell tools are for inspection and execution only.",
-    ],
     parameters: Type.Object(
       {
         command: Type.Union(
@@ -308,6 +300,7 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
           params.old_str ?? undefined,
           params.new_str ?? undefined,
           signal,
+          { requireObservation: false },
         );
         return {
           content: [
@@ -321,7 +314,9 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
         throw new Error("Parameter `insert_line` is required for command: insert");
       const value = requiredForCommand(params.new_str ?? undefined, "new_str", "insert");
       const targetPath = requireAbsolute(params.path);
-      const outcome = await runtime.editorInsert(targetPath, params.insert_line, value, signal);
+      const outcome = await runtime.editorInsert(targetPath, params.insert_line, value, signal, {
+        requireObservation: false,
+      });
       return {
         content: [{ type: "text", text: `The file ${outcome.path} has been edited successfully.` }],
         details: details(outcome.path, outcome.before, outcome.after, "M"),
