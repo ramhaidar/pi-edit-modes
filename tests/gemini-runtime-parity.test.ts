@@ -436,6 +436,35 @@ test("Gemini relative-path correction honors configurable ignore toggles and cus
   }
 });
 
+test("Gemini custom ignore file paths remain project-root-relative", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-gemini-custom-ignore-root-relative-"));
+  const cwd = join(root, "workspace");
+  const outsideIgnore = join(root, "outside.ignore");
+  try {
+    await mkdir(cwd);
+    await mkdir(join(cwd, "src"));
+    await mkdir(join(cwd, "generated"));
+    await writeFile(outsideIgnore, "generated/\n", "utf8");
+    await writeFile(join(cwd, "src", "foo.ts"), "src\n", "utf8");
+    await writeFile(join(cwd, "generated", "foo.ts"), "generated\n", "utf8");
+
+    await assert.rejects(
+      () =>
+        validateGeminiWorkspacePath(cwd, "foo.ts", {
+          correctRelative: true,
+          fileFiltering: {
+            respectGitIgnore: false,
+            respectGeminiIgnore: false,
+            customIgnoreFilePaths: [outsideIgnore],
+          },
+        }),
+      /ambiguous and matches multiple files/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Gemini replace rejects ambiguous relative-path correction", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-gemini-path-ambiguous-"));
   try {

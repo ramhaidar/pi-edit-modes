@@ -45,7 +45,7 @@ function isGitRepository(directory: string): boolean {
 
 function parseRootIgnoreFile(projectRoot: string, fileName: string): string[] {
   try {
-    const filePath = path.isAbsolute(fileName) ? fileName : path.join(projectRoot, fileName);
+    const filePath = path.join(projectRoot, fileName);
     return fs
       .readFileSync(filePath, "utf8")
       .split(/\r\n|\n|\r/)

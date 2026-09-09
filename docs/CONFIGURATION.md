@@ -55,7 +55,7 @@ Settings are stored in `~/.pi/agent/edit-modes.json`:
 - `gemini.disableLLMCorrection`: boolean, default `true`, matching current Gemini CLI's correction default.
 - `gemini.fileFiltering.respectGitIgnore`: boolean, default `true`. Controls whether Gemini `replace` fallback path discovery respects `.gitignore` and `.git/info/exclude`.
 - `gemini.fileFiltering.respectGeminiIgnore`: boolean, default `true`. Controls whether fallback discovery respects `.geminiignore`.
-- `gemini.fileFiltering.customIgnoreFilePaths`: array of ignore-file paths, default `[]`. These files participate in fallback discovery filtering. This arbitrary path list is configured in JSON rather than the settings overlay.
+- `gemini.fileFiltering.customIgnoreFilePaths`: array of project-root-relative ignore-file paths, default `[]`. These files participate in fallback discovery filtering. This arbitrary path list is configured in JSON rather than the settings overlay.
 - `deepseek.preset`: `standard` or `minimal`.
 
 The legacy `codex.surface` setting is accepted as a migration fallback. The legacy `gemini.strictExactMatch` boolean is also accepted so older settings files still load, but it is no longer projected into current Gemini behavior.
