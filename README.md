@@ -29,7 +29,7 @@ Runtime controls are `/tool-mode` and `/tool-surface`; the deprecated `/apply-pa
 
 ### Gemini
 
-`replace` supports create-via-empty-`old_string`, exact/flexible/regex/fuzzy recovery, optional bounded LLM correction, omission protection, whole-proposal approval modification, session/workspace-scoped prepared mutations, stale-preimage checks, and updated-code result context. `write_file` creates or overwrites complete content through the same secure mutation path.
+`replace` supports create-via-empty-`old_string`, exact/flexible/regex/fuzzy recovery, optional bounded LLM correction, omission protection, whole-proposal approval modification, session/workspace-scoped prepared mutations, stale-preimage checks, updated-code result context, bounded relative-path correction, Gemini-style defensive/generic path validation, sensitive-path blocking, and a workspace fence that rejects canonical escapes. `write_file` creates or overwrites complete content through the same mutation path and boundary.
 
 See [Gemini mode](docs/GEMINI.md) for the focused contract and [Tool flows and parity](docs/TOOL-FLOWS.md) for shared runtime/provider behavior.
 
@@ -37,7 +37,7 @@ See [Gemini mode](docs/GEMINI.md) for the focused contract and [Tool flows and p
 
 `standard` exposes Harness-shaped `read`, `write`, and `edit`, plus conditional `read_image`. Reads are concurrent; mutations are sequential/exclusive; reads at 10 MiB and above stream; observation/version state is session + workspace scoped.
 
-`minimal` exposes sequential/exclusive `str_replace_editor` with `view`, `create`, `str_replace`, and `insert`. Its prompt names only that available editor. Directory views do not follow symlinked directories and use upstream `d` / `f` / `?` markers. Shell guidance names only active mutation tools.
+`minimal` exposes sequential/exclusive `str_replace_editor` with `view`, `create`, `str_replace`, and `insert`. Matching the shipped minimal preset, `str_replace`/`insert` do not require a prior `view` and the editor contributes no standalone prompt section. Directory views do not follow symlinked directories and use upstream `d` / `f` / `?` markers. Pi deliberately keeps minimal editor paths confined to the workspace even though current upstream minimal uses bare `fs-local`; shell guidance names only active mutation tools.
 
 Pi does not expose Harness's durable attachment store, so `read_image` returns a normalized native image block directly. See [DeepSeek mode](docs/DEEPSEEK.md) for the focused contract.
 

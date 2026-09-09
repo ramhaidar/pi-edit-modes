@@ -58,6 +58,12 @@ Model-facing parameters are exactly `file_path` and `content`.
 
 Both Gemini mutation tools use the shared secure filesystem facade and file mutation queue.
 
+Before proposal calculation, Gemini also applies Gemini-style defensive path normalization: null bytes are stripped, accidental `@` reference prefixes are normalized when appropriate, URI/file-URL input is decoded, and existing symlink ancestors are canonicalized. Relative parent escapes, absolute paths outside the workspace, canonical targets outside the workspace, and blocked sensitive segments (`.git`, `.env`, `node_modules`, `gha-creds-*.json`, including upstream case/NTFS alias handling) are rejected as `PATH_NOT_IN_WORKSPACE`; safe in-workspace symlinks resolve to their canonical in-workspace target. Blocking happens before file reads and optional correction-model calls. Execution repeats validation before the mutation and again immediately before commit.
+
+Resolved model-generated paths also use Gemini CLI's generic preflight checks for control characters, common log/error fragments, suspicious long quote/ellipsis forms, the 4096-character path limit, and the 255-character component limit. Relative `replace` targets additionally use a bounded 50-directory suffix/basename search when the direct path is missing; a unique match is corrected and ambiguous matches are rejected.
+
+The race guarantee depends on the shared filesystem backend. Descriptor/openat-backed secure implementations prevent symlink redirection between validation and commit. The portable Node fallback is intentionally best-effort and retains a path-based TOCTOU window between its checks and write; `PI_APPLY_PATCH_REQUIRE_SECURE_FS=1` makes the host fail closed when that secure backend is unavailable.
+
 ### Approval and result context
 
 `gemini.approval` defaults to `ask_user`.
@@ -98,9 +104,11 @@ On `replace`, `str_replace_editor` is not exposed by the standard preset. On `ad
 
 `minimal` exposes only `str_replace_editor` from the managed filesystem family on the strict surface, with `view`, `create`, `str_replace`, and `insert`. It requires an absolute `path`.
 
-`str_replace_editor` is registered as sequential/exclusive because `create`, `str_replace`, and `insert` mutate files. Its prompt guidance references only `str_replace_editor`; it does not instruct the model to call unavailable `write` or `edit` tools.
+`str_replace_editor` is registered as sequential/exclusive because `create`, `str_replace`, and `insert` mutate files. Matching the shipped Harness minimal composition, the tool contributes no standalone prompt snippet/guidelines and `str_replace`/`insert` do not require a prior `view`; each operation derives its CAS version from the current file. Standard `read`/`write`/`edit` continue to use mandatory observation policy, and the underlying editor methods retain observation-aware behavior when composed directly with that policy.
 
 Directory `view` uses `lstat` and does not recurse through symlinked directories. Model-facing directory markers follow upstream: `d` for directory, `f` for file, and `?` for symlinks/other entries. The `?` marker does not change the no-follow traversal behavior.
+
+Unlike the current shipped Harness minimal preset's bare `fs-local`, Pi retains workspace confinement for all minimal editor paths. This is a deliberate safer host divergence: the model-facing editor vocabulary and mutation flow are aligned, but paths outside the Pi workspace remain inaccessible.
 
 ### Shell guidance
 
@@ -110,7 +118,7 @@ Provider-facing shell descriptions are conditioned on the mutation tools that ar
 - strict `minimal`: `str_replace_editor`
 - additive/hybrid: all active mutation editors may be named
 
-The guidance tells the model not to mutate files through shell redirection, PowerShell write commands, `sed -i`, scripts, and similar mechanisms. This is guidance, not a security boundary; containment and mutation checks come from the actual filesystem/runtime controls.
+The guidance tells the model not to mutate files through shell redirection, PowerShell write commands, `sed -i`, scripts, and similar mechanisms. This Pi-specific shell-description conditioning is guidance, not a standalone `str_replace_editor` system-prompt contribution and not a security boundary; containment and mutation checks come from the actual filesystem/runtime controls.
 
 ### Sandbox escalation fields
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { extname, isAbsolute, resolve } from "node:path";
+import { extname, resolve } from "node:path";
 import { generateDiffString, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { withSharedSecureFilesystem } from "../codex/engine.ts";
 import {
@@ -11,6 +11,7 @@ import {
   normalizeNewFileLineEndings,
   validateGeminiOmissionPlaceholders,
 } from "./upstream-parity.ts";
+import { validateGeminiWorkspacePath } from "./workspace-access.ts";
 
 export type GeminiMutationToolName = "replace" | "write_file";
 export interface PreparedGeminiMutation {
@@ -50,9 +51,6 @@ export class GeminiEditNoChangeError extends Error {
     this.name = "GeminiEditNoChangeError";
   }
 }
-const targetPath = (cwd: string, path: string) =>
-  isAbsolute(path) ? resolve(path) : resolve(cwd, path);
-
 function mutationScopeKey(scope: GeminiMutationScope): string {
   let sessionId = "__unknown_session__";
   try {
@@ -223,7 +221,9 @@ export async function calculateGeminiMutation(
   const disableLLMCorrection = options.disableLLMCorrection ?? true;
   const filePath = typeof params.file_path === "string" ? params.file_path : "";
   if (!filePath) throw new Error("file_path must be a non-empty string");
-  const absolutePath = targetPath(ctx.cwd, filePath);
+  const absolutePath = await validateGeminiWorkspacePath(ctx.cwd, filePath, {
+    correctRelative: toolName === "replace",
+  });
   return withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
     const before = await fs.readFileOptional(absolutePath, signal);
     if (toolName === "write_file") {

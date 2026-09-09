@@ -8,6 +8,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { withSharedSecureFilesystem } from "../codex/engine.ts";
 import { calculateGeminiMutation, takeGeminiMutation } from "./lifecycle.ts";
 import { getDiffContextSnippet, getGeminiToolContract } from "./upstream-parity.ts";
+import { validateGeminiWorkspacePath } from "./workspace-access.ts";
 import {
   DiffCallRenderComponent,
   displayToolPath,
@@ -112,6 +113,7 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
       const mutation =
         takeGeminiMutation(toolCallId, ctx) ??
         (await calculateGeminiMutation(toolCallId, "replace", params, ctx, signal));
+      await validateGeminiWorkspacePath(ctx.cwd, mutation.absolutePath);
       return withFileMutationQueue(mutation.absolutePath, () =>
         withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
           const current = await fs.readFileOptional(mutation.absolutePath, signal);
@@ -119,6 +121,7 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
             throw new Error(
               `replace target '${params.file_path}' changed after proposal calculation; re-read and retry`,
             );
+          await validateGeminiWorkspacePath(ctx.cwd, mutation.absolutePath);
           if (mutation.before === undefined)
             await fs.createFile(mutation.absolutePath, mutation.after, signal);
           else if (mutation.after !== mutation.before)
@@ -203,6 +206,7 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
       const mutation =
         takeGeminiMutation(toolCallId, ctx) ??
         (await calculateGeminiMutation(toolCallId, "write_file", params, ctx, signal));
+      await validateGeminiWorkspacePath(ctx.cwd, mutation.absolutePath);
       return withFileMutationQueue(mutation.absolutePath, () =>
         withSharedSecureFilesystem(ctx.cwd, signal, async (fs) => {
           const current = await fs.readFileOptional(mutation.absolutePath, signal);
@@ -210,6 +214,7 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
             throw new Error(
               `write_file target '${params.file_path}' changed after proposal calculation; retry with current content`,
             );
+          await validateGeminiWorkspacePath(ctx.cwd, mutation.absolutePath);
           if (mutation.before === undefined)
             await fs.createFile(mutation.absolutePath, mutation.after, signal);
           else if (mutation.after !== mutation.before)
