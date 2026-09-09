@@ -18,9 +18,9 @@ Use **pnpm exclusively** in this repository. Never use `npm`, `npx`, `yarn`, or 
 - `gemini`: Gemini CLI-shaped `replace` and `write_file`
 - `deepseek`: Harness-compatible `standard` preset (`read`/`write`/`edit`, conditional `read_image`) or `minimal` preset (`str_replace_editor`)
 
-Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships `src/`, `docs/`, `README.md`, and `LICENSE` directly — there is no build step.
+Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships `src/`, `docs/`, `scripts/fetch-vendors.mjs`, `README.md`, and `LICENSE` directly — there is no build step.
 
-Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) are peer dependencies; `koffi` is the only direct dependency (used in `src/tools/deepseek/win32.ts` for Win32 APIs).
+Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) are peer dependencies. Direct dependencies are `ignore` (Gemini discovery filtering) and `koffi` (Win32 APIs used by the secure filesystem backend).
 
 ## Commands
 

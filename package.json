@@ -29,6 +29,7 @@
   "files": [
     "src",
     "docs",
+    "scripts/fetch-vendors.mjs",
     "README.md",
     "LICENSE"
   ],
