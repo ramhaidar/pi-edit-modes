@@ -79,12 +79,6 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
     name: "replace",
     label: "replace",
     description: contract.replace.description,
-    promptSnippet: "Use replace for surgical edits to existing files.",
-    promptGuidelines: [
-      "old_string and new_string are literal, unescaped text.",
-      "Provide enough surrounding context for old_string to identify the intended location uniquely.",
-      "Use allow_multiple=true only when every occurrence of the same old_string should change.",
-    ],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: contract.replace.parameters.file_path }),
@@ -179,10 +173,6 @@ export function registerGeminiTools(pi: ExtensionAPI): void {
     name: "write_file",
     label: "write_file",
     description: contract.write_file.description,
-    promptSnippet: "Use write_file to create or fully rewrite a file.",
-    promptGuidelines: [
-      "Provide the complete file content. Do not use omission placeholders for unchanged sections.",
-    ],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: contract.write_file.parameters.file_path }),
