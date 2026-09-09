@@ -135,6 +135,21 @@ test("Gemini provider descriptions follow the active model family", () => {
     legacyContract.replace.parameters.old_string,
   );
   assert.notEqual(legacyDeclarations[0].description, gemini3Declarations[0].description);
+
+  for (const modelId of ["gemini-3x", "gemini_3-foo", "vendor/gemini_3"]) {
+    assert.equal(
+      getGeminiToolContract(modelId).replace.description,
+      legacyContract.replace.description,
+      `${modelId} must not be classified as Gemini 3`,
+    );
+  }
+  for (const modelId of ["gemini-3", "gemini-3-pro", "gemini-3.1-pro"]) {
+    assert.equal(
+      getGeminiToolContract(modelId).replace.description,
+      gemini3Contract.replace.description,
+      `${modelId} must use the Gemini 3 contract`,
+    );
+  }
 });
 
 test("Codex mode rewrites Google apply_patch compatibility description", () => {
@@ -394,7 +409,7 @@ test("Codex mode removes stale DeepSeek editor", () => {
   assert.deepEqual(names, ["read"]);
 });
 
-test("DeepSeek minimal shell guidance mentions only str_replace_editor", () => {
+test("DeepSeek minimal strict surface preserves upstream shell description", () => {
   const payload = {
     tools: [
       { type: "function", function: { name: "bash", description: "Run a shell command" } },
@@ -407,12 +422,11 @@ test("DeepSeek minimal shell guidance mentions only str_replace_editor", () => {
     codexSupport: { supported: false },
     codexGuard: passthroughCodexGuard,
     activeTools: ["bash", "str_replace_editor"],
+    surface: "deepseek-replace",
+    deepseekPreset: "minimal",
   });
-  assert.equal(result.changed, true);
   const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
-  assert.match(bash.function.description, /Use str_replace_editor for file mutations/);
-  assert.doesNotMatch(bash.function.description, /Use write|Use edit/);
-  assert.match(bash.function.description, /WriteAllLines/);
+  assert.equal(bash.function.description, "Run a shell command");
 });
 
 test("DeepSeek shell guard is not applied when no DeepSeek mutation tool is active", () => {
@@ -430,7 +444,7 @@ test("DeepSeek shell guard is not applied when no DeepSeek mutation tool is acti
   assert.equal((result.payload as any).tools[0].function.description, "Run a shell command");
 });
 
-test("DeepSeek standard shell guidance mentions only write/edit", () => {
+test("DeepSeek standard strict surface preserves upstream shell description", () => {
   const payload = {
     tools: [
       { type: "function", function: { name: "bash", description: "Run a shell command" } },
@@ -444,10 +458,11 @@ test("DeepSeek standard shell guidance mentions only write/edit", () => {
     codexSupport: { supported: false },
     codexGuard: passthroughCodexGuard,
     activeTools: ["bash", "write", "edit"],
+    surface: "deepseek-replace",
+    deepseekPreset: "standard",
   });
   const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
-  assert.match(bash.function.description, /Use write or edit for file mutations/);
-  assert.doesNotMatch(bash.function.description, /str_replace_editor/);
+  assert.equal(bash.function.description, "Run a shell command");
 });
 
 test("DeepSeek additive shell guidance mentions every active mutation tool", () => {
@@ -465,6 +480,7 @@ test("DeepSeek additive shell guidance mentions every active mutation tool", () 
     codexSupport: { supported: false },
     codexGuard: passthroughCodexGuard,
     activeTools: ["bash", "write", "edit", "str_replace_editor"],
+    surface: "deepseek-additive",
   });
   const bash = (result.payload as any).tools.find((tool: any) => tool.function.name === "bash");
   assert.match(

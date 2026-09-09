@@ -717,6 +717,7 @@ export function guardProviderPayload(input: {
   // every provider request.
   const schemas = rewriteDeepSeekFileToolSchemas(stripped.payload);
   let combined = mergeGuardResults(stripped, schemas);
+  if (input.surface !== "deepseek-additive") return combined;
   return mergeGuardResults(
     combined,
     guardDeepSeekShellDescriptions(combined.payload, input.activeTools ?? []),
