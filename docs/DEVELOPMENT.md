@@ -24,8 +24,8 @@ There is no build step. The package ships TypeScript source directly.
 Coverage includes:
 
 - mode resolution, settings migration/persistence, strict/additive routing, and provider wire filtering
-- Gemini create/recovery/correction/approval behavior, secondary no-change error semantics, corrected-retry original-error fallback, whole-proposed-file manual modification, fuzzy match line feedback, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings
-- DeepSeek observation and stale-version semantics, session isolation, standard and minimal exclusive mutation scheduling, active-tool-specific shell guidance, large-file streaming, image validation/normalization, `str_replace_editor`, and no-follow directory listing/marker semantics
+- Gemini create/recovery/correction/approval behavior, workspace path confinement (relative, absolute, symlink, and commit-time redirect cases), sensitive-path blocking, generic untrusted-path preflight, bounded relative-path correction, secondary no-change error semantics, corrected-retry original-error fallback, whole-proposed-file manual modification, fuzzy match line feedback, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings
+- DeepSeek observation and stale-version semantics, session isolation, standard observation-policy enforcement, shipped-minimal no-prior-view mutation flow, standard and minimal exclusive mutation scheduling, active-tool-specific shell guidance, no standalone minimal editor prompt contribution, large-file streaming, image validation/normalization, `str_replace_editor`, and no-follow directory listing/marker semantics
 - Codex Environment ID grammar/execution rejection on a single-environment host
 - shared diff rendering
 
