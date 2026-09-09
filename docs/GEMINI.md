@@ -36,7 +36,9 @@ Validation runs before proposal calculation, again when execution starts, and im
 
 ## Model conditioning and host divergence
 
-Provider dispatch rewrites tool and parameter descriptions to the active Gemini model-family contract. Deprecated aliases are stripped.
+Provider dispatch rewrites tool and parameter descriptions to the active Gemini model-family contract. Gemini 3 uses the current upstream family boundary `^gemini-3(\\.|-|$)`; edge IDs such as `gemini-3x` or `gemini_3-*` therefore stay on the legacy contract. Deprecated aliases are stripped.
+
+Family selection uses the concrete `ctx.model.id` that Pi exposes. Gemini CLI can resolve aliases such as `auto`, `pro`, or `flash` and may use dynamic model metadata before selecting a family; this extension does not reproduce that routing subsystem. If Pi has already resolved an alias to a concrete Gemini ID, the normal family matcher applies.
 
 `replace` and `write_file` do not add Pi-only `promptSnippet` or `promptGuidelines`; tool-specific model conditioning comes from the upstream-shaped declaration description/schema.
 

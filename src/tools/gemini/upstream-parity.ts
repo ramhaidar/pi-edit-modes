@@ -247,7 +247,5 @@ const LEGACY_CONTRACT: GeminiToolContract = {
 };
 
 export function getGeminiToolContract(modelId?: string): GeminiToolContract {
-  return /(?:^|[-_/])gemini[-_]?3(?:\D|$)/i.test(modelId ?? "")
-    ? GEMINI_3_CONTRACT
-    : LEGACY_CONTRACT;
+  return /^gemini-3(?:\.|-|$)/i.test(modelId ?? "") ? GEMINI_3_CONTRACT : LEGACY_CONTRACT;
 }
