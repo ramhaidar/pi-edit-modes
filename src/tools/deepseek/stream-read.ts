@@ -29,8 +29,8 @@ export class StreamReadError extends Error {
   }
 }
 
-export async function readTextWindowStreaming(
-  path: string,
+export async function readTextWindowFromChunkProducer(
+  produce: (consume: (chunk: Buffer) => void | Promise<void>) => Promise<void>,
   options: StreamReadOptions,
 ): Promise<StreamReadWindow> {
   const selected: Array<{ number: number; text: string }> = [];
@@ -76,28 +76,28 @@ export async function readTextWindowStreaming(
     lineOpen = false;
   };
 
-  try {
-    const stream = createReadStream(path, options.signal ? { signal: options.signal } : undefined);
-    for await (const rawChunk of stream) {
-      if (options.signal?.aborted) throw new StreamReadError("read aborted", "aborted");
-      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-      if (sampleRemaining > 0) {
-        const sample = chunk.subarray(0, sampleRemaining);
-        if (sample.includes(0)) throw new StreamReadError("binary file", "binary");
-        sampleRemaining -= sample.length;
-      }
-      let text = decoder.decode(chunk, { stream: true });
-      while (text.length > 0) {
-        const newline = text.indexOf("\n");
-        if (newline < 0) {
-          append(text);
-          break;
-        }
-        append(text.slice(0, newline));
-        finishLine();
-        text = text.slice(newline + 1);
-      }
+  const consume = (chunk: Buffer) => {
+    if (options.signal?.aborted) throw new StreamReadError("read aborted", "aborted");
+    if (sampleRemaining > 0) {
+      const sample = chunk.subarray(0, sampleRemaining);
+      if (sample.includes(0)) throw new StreamReadError("binary file", "binary");
+      sampleRemaining -= sample.length;
     }
+    let text = decoder.decode(chunk, { stream: true });
+    while (text.length > 0) {
+      const newline = text.indexOf("\n");
+      if (newline < 0) {
+        append(text);
+        break;
+      }
+      append(text.slice(0, newline));
+      finishLine();
+      text = text.slice(newline + 1);
+    }
+  };
+
+  try {
+    await produce(consume);
     const tail = decoder.decode();
     if (tail.length > 0) append(tail);
     if (lineOpen) finishLine();
@@ -118,4 +118,17 @@ export async function readTextWindowStreaming(
     );
   }
   return { lines: selected, totalLines, truncatedByBytes };
+}
+
+export async function readTextWindowStreaming(
+  path: string,
+  options: StreamReadOptions,
+): Promise<StreamReadWindow> {
+  return readTextWindowFromChunkProducer(async (consume) => {
+    const stream = createReadStream(path, options.signal ? { signal: options.signal } : undefined);
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      await consume(chunk);
+    }
+  }, options);
 }

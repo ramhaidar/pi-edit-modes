@@ -7,7 +7,7 @@ import {
 	read as readFd,
 	write as writeFd,
 } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse as parsePath, relative, resolve, sep } from "node:path";
 import {
@@ -3010,6 +3010,413 @@ export interface SharedSecureFilesystem {
 	writeFile(path: string, content: string, allowCreate: boolean, signal?: AbortSignal): Promise<void>;
 	createFile(path: string, content: string, signal?: AbortSignal): Promise<void>;
 	stat(path: string, signal?: AbortSignal): Promise<{ exists: boolean; isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean }>;
+	statDetailed(path: string, signal?: AbortSignal): Promise<SharedSecureFileInfo | undefined>;
+	readBytes(path: string, maxBytes?: number, signal?: AbortSignal): Promise<SharedSecureReadSnapshot | undefined>;
+	consumeBytes(
+		path: string,
+		consume: (chunk: Buffer) => void | Promise<void>,
+		signal?: AbortSignal,
+	): Promise<SharedSecureFileInfo | undefined>;
+	writeConditional(
+		path: string,
+		content: string,
+		options: SharedSecureWriteOptions,
+		signal?: AbortSignal,
+	): Promise<SharedSecureWriteResult>;
+	listDirectory(path: string, signal?: AbortSignal): Promise<SharedSecureDirectoryEntry[]>;
+}
+
+export interface SharedSecureFileInfo {
+	version: string;
+	identity: string;
+	mode: number;
+	size: number;
+	isFile: boolean;
+	isDirectory: boolean;
+	isSymbolicLink: boolean;
+}
+
+export interface SharedSecureReadSnapshot {
+	bytes: Buffer;
+	info: SharedSecureFileInfo;
+}
+
+export interface SharedSecureWriteOptions {
+	expectedVersion?: string;
+	createIfAbsent?: boolean;
+}
+
+export type SharedSecureWriteResult =
+	| { status: "written"; info: SharedSecureFileInfo }
+	| { status: "exists" }
+	| { status: "missing" }
+	| { status: "stale" };
+
+export interface SharedSecureDirectoryEntry {
+	name: string;
+	type: "file" | "directory" | "symlink" | "other";
+}
+
+export class SharedSecureFileLimitError extends Error {
+	readonly size: number;
+	readonly limit: number;
+
+	constructor(path: string, size: number, limit: number) {
+		super(`File '${path}' is ${size} bytes, exceeding the ${limit}-byte read limit`);
+		this.name = "SharedSecureFileLimitError";
+		this.size = size;
+		this.limit = limit;
+	}
+}
+
+function sharedFileInfoFromStats(info: any): SharedSecureFileInfo {
+	const dev = String(info.dev);
+	const ino = String(info.ino);
+	const size = Number(info.size);
+	const mtimeNs = String(info.mtimeNs ?? BigInt(Math.trunc(Number(info.mtimeMs ?? 0) * 1_000_000)));
+	const ctimeNs = String(info.ctimeNs ?? BigInt(Math.trunc(Number(info.ctimeMs ?? 0) * 1_000_000)));
+	return {
+		version: `${dev}:${ino}:${String(info.size)}:${mtimeNs}:${ctimeNs}`,
+		identity: `${dev}:${ino}`,
+		mode: typeof info.mode === "bigint" ? Number(info.mode & 0o777n) : Number(info.mode ?? 0) & 0o777,
+		size,
+		isFile: info.isFile(),
+		isDirectory: info.isDirectory(),
+		isSymbolicLink: info.isSymbolicLink?.() === true,
+	};
+}
+
+async function statSharedSecureFile(
+	context: SecureFilesystemContext,
+	absolutePath: string,
+	signal?: AbortSignal,
+): Promise<SharedSecureFileInfo | undefined> {
+	if (isPortableFilesystemContext(context)) {
+		const route = await inspectPortablePath(
+			context,
+			absolutePath,
+			{ allowMissingFinal: true, createParents: false },
+			signal,
+		);
+		if (!route.exists) return undefined;
+		if (route.isSymbolicLink) {
+			throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+		}
+		return sharedFileInfoFromStats(await stat(route.physicalPath, { bigint: true }));
+	}
+
+	const basic = await lstatSecureFinal(context, absolutePath, signal);
+	if (!basic.exists) return undefined;
+	if (basic.isSymbolicLink) {
+		throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+	}
+	const { parent, name, closeParent } = await openSecureParent(context, absolutePath, false, signal);
+	let handle: FileHandle | undefined;
+	try {
+		handle = basic.isDirectory
+			? await openSecureDirectoryChild(parent, name, signal)
+			: await openSecureChild(parent, name, SECURE_READ_FLAGS);
+		return sharedFileInfoFromStats(await handle.stat({ bigint: true }));
+	} finally {
+		await handle?.close().catch(() => undefined);
+		if (closeParent) await parent.close().catch(() => undefined);
+	}
+}
+
+async function readSharedSecureBytes(
+	context: SecureFilesystemContext,
+	absolutePath: string,
+	maxBytes: number | undefined,
+	signal?: AbortSignal,
+): Promise<SharedSecureReadSnapshot | undefined> {
+	if (isPortableFilesystemContext(context)) {
+		const route = await inspectPortablePath(
+			context,
+			absolutePath,
+			{ allowMissingFinal: true, createParents: false },
+			signal,
+		);
+		if (!route.exists) return undefined;
+		if (route.isSymbolicLink) {
+			throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+		}
+		if (!route.isFile) throw new Error(`Cannot read non-file '${absolutePath}'`);
+		let handle: FileHandle | undefined;
+		try {
+			handle = await open(route.physicalPath, "r");
+			const info = sharedFileInfoFromStats(await handle.stat({ bigint: true }));
+			if (maxBytes !== undefined && info.size > maxBytes)
+				throw new SharedSecureFileLimitError(absolutePath, info.size, maxBytes);
+			const chunks: Buffer[] = [];
+			let total = 0;
+			let position = 0;
+			while (true) {
+				throwIfAborted(signal);
+				const buffer = Buffer.allocUnsafe(FILE_READ_CHUNK_BYTES);
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+				if (bytesRead === 0) break;
+				position += bytesRead;
+				total += bytesRead;
+				if (maxBytes !== undefined && total > maxBytes)
+					throw new SharedSecureFileLimitError(absolutePath, total, maxBytes);
+				chunks.push(buffer.subarray(0, bytesRead));
+			}
+			return { bytes: Buffer.concat(chunks, total), info };
+		} finally {
+			await handle?.close().catch(() => undefined);
+		}
+	}
+
+	const { parent, name, closeParent } = await openSecureParent(context, absolutePath, false, signal);
+	let file: FileHandle | undefined;
+	try {
+		file = await openSecureChild(parent, name, SECURE_READ_FLAGS);
+		const info = sharedFileInfoFromStats(await file.stat({ bigint: true }));
+		if (!info.isFile) throw new Error(`Cannot read non-file '${absolutePath}'`);
+		if (maxBytes !== undefined && info.size > maxBytes)
+			throw new SharedSecureFileLimitError(absolutePath, info.size, maxBytes);
+		const chunks: Buffer[] = [];
+		let total = 0;
+		let position = 0;
+		while (true) {
+			throwIfAborted(signal);
+			const buffer = Buffer.allocUnsafe(FILE_READ_CHUNK_BYTES);
+			const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			total += bytesRead;
+			if (maxBytes !== undefined && total > maxBytes)
+				throw new SharedSecureFileLimitError(absolutePath, total, maxBytes);
+			chunks.push(buffer.subarray(0, bytesRead));
+		}
+		return { bytes: Buffer.concat(chunks, total), info };
+	} catch (error) {
+		if (isMissing(error)) return undefined;
+		throw error;
+	} finally {
+		await file?.close().catch(() => undefined);
+		if (closeParent) await parent.close().catch(() => undefined);
+	}
+}
+
+async function consumeSharedSecureBytes(
+	context: SecureFilesystemContext,
+	absolutePath: string,
+	consume: (chunk: Buffer) => void | Promise<void>,
+	signal?: AbortSignal,
+): Promise<SharedSecureFileInfo | undefined> {
+	if (isPortableFilesystemContext(context)) {
+		const route = await inspectPortablePath(
+			context,
+			absolutePath,
+			{ allowMissingFinal: true, createParents: false },
+			signal,
+		);
+		if (!route.exists) return undefined;
+		if (route.isSymbolicLink) {
+			throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+		}
+		if (!route.isFile) throw new Error(`Cannot read non-file '${absolutePath}'`);
+		let handle: FileHandle | undefined;
+		try {
+			handle = await open(route.physicalPath, "r");
+			const info = sharedFileInfoFromStats(await handle.stat({ bigint: true }));
+			let position = 0;
+			while (true) {
+				throwIfAborted(signal);
+				const buffer = Buffer.allocUnsafe(FILE_READ_CHUNK_BYTES);
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+				if (bytesRead === 0) break;
+				position += bytesRead;
+				await consume(buffer.subarray(0, bytesRead));
+			}
+			return info;
+		} finally {
+			await handle?.close().catch(() => undefined);
+		}
+	}
+
+	const { parent, name, closeParent } = await openSecureParent(context, absolutePath, false, signal);
+	let file: FileHandle | undefined;
+	try {
+		file = await openSecureChild(parent, name, SECURE_READ_FLAGS);
+		const info = sharedFileInfoFromStats(await file.stat({ bigint: true }));
+		if (!info.isFile) throw new Error(`Cannot read non-file '${absolutePath}'`);
+		let position = 0;
+		while (true) {
+			throwIfAborted(signal);
+			const buffer = Buffer.allocUnsafe(FILE_READ_CHUNK_BYTES);
+			const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			await consume(buffer.subarray(0, bytesRead));
+		}
+		return info;
+	} catch (error) {
+		if (isMissing(error)) return undefined;
+		throw error;
+	} finally {
+		await file?.close().catch(() => undefined);
+		if (closeParent) await parent.close().catch(() => undefined);
+	}
+}
+
+async function writeSharedSecureConditional(
+	context: SecureFilesystemContext,
+	absolutePath: string,
+	content: string,
+	options: SharedSecureWriteOptions,
+	signal?: AbortSignal,
+): Promise<SharedSecureWriteResult> {
+	if (options.createIfAbsent && options.expectedVersion !== undefined)
+		throw new Error("createIfAbsent and expectedVersion are mutually exclusive");
+
+	if (isPortableFilesystemContext(context)) {
+		const route = await inspectPortablePath(
+			context,
+			absolutePath,
+			{ allowMissingFinal: true, createParents: options.createIfAbsent === true },
+			signal,
+		);
+		if (options.createIfAbsent) {
+			if (route.exists) return { status: "exists" };
+			try {
+				await writeFile(route.physicalPath, Buffer.from(content, "utf8"), { flag: "wx" });
+			} catch (error) {
+				if (isAlreadyExists(error)) return { status: "exists" };
+				throw error;
+			}
+			return { status: "written", info: sharedFileInfoFromStats(await stat(route.physicalPath, { bigint: true })) };
+		}
+		if (!route.exists) return { status: "missing" };
+		if (route.isSymbolicLink) {
+			throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+		}
+		if (!route.isFile) throw new Error(`Cannot write non-file '${absolutePath}'`);
+		const before = sharedFileInfoFromStats(await stat(route.physicalPath, { bigint: true }));
+		if (options.expectedVersion !== undefined && before.version !== options.expectedVersion)
+			return { status: "stale" };
+		throwIfAborted(signal);
+		await writeFile(route.physicalPath, Buffer.from(content, "utf8"));
+		throwIfAborted(signal);
+		return { status: "written", info: sharedFileInfoFromStats(await stat(route.physicalPath, { bigint: true })) };
+	}
+
+	const { parent, name, closeParent } = await openSecureParent(
+		context,
+		absolutePath,
+		options.createIfAbsent === true,
+		signal,
+	);
+	let file: FileHandle | undefined;
+	try {
+		if (options.createIfAbsent) {
+			try {
+				file = await openSecureChild(
+					parent,
+					name,
+					SECURE_WRITE_FLAGS | FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL,
+					0o666,
+				);
+			} catch (error) {
+				if (isAlreadyExists(error)) return { status: "exists" };
+				throw error;
+			}
+		} else {
+			try {
+				file = await openSecureChild(parent, name, SECURE_WRITE_FLAGS);
+			} catch (error) {
+				if (isMissing(error)) return { status: "missing" };
+				throw error;
+			}
+			const before = sharedFileInfoFromStats(await file.stat({ bigint: true }));
+			if (!before.isFile) throw new Error(`Cannot write non-file '${absolutePath}'`);
+			if (options.expectedVersion !== undefined && before.version !== options.expectedVersion)
+				return { status: "stale" };
+			await file.truncate(0);
+		}
+		await writeAll(file, content, signal);
+		return { status: "written", info: sharedFileInfoFromStats(await file.stat({ bigint: true })) };
+	} finally {
+		await file?.close().catch(() => undefined);
+		if (closeParent) await parent.close().catch(() => undefined);
+	}
+}
+
+function fdDirectoryListingPath(fd: number): string {
+	return process.platform === "linux" ? `/proc/self/fd/${fd}` : `/dev/fd/${fd}`;
+}
+
+async function listSharedSecureDirectory(
+	context: SecureFilesystemContext,
+	absolutePath: string,
+	signal?: AbortSignal,
+): Promise<SharedSecureDirectoryEntry[]> {
+	if (isPortableFilesystemContext(context)) {
+		const route = await inspectPortablePath(
+			context,
+			absolutePath,
+			{ allowMissingFinal: false, createParents: false },
+			signal,
+		);
+		if (route.isSymbolicLink) {
+			throw new PiPatchPolicyError("security", `Refusing to follow symlink: ${absolutePath}`);
+		}
+		if (!route.isDirectory) throw new Error(`Cannot list non-directory '${absolutePath}'`);
+		const names = await readdir(route.physicalPath);
+		const entries: SharedSecureDirectoryEntry[] = [];
+		for (const name of names) {
+			throwIfAborted(signal);
+			try {
+				const info = await lstat(join(route.physicalPath, name));
+				entries.push({
+					name,
+					type: info.isSymbolicLink()
+						? "symlink"
+						: info.isDirectory()
+							? "directory"
+							: info.isFile()
+								? "file"
+								: "other",
+				});
+			} catch (error) {
+				if (!isMissing(error)) throw error;
+				entries.push({ name, type: "other" });
+			}
+		}
+		return entries;
+	}
+
+	const { parent, name, closeParent } = await openSecureParent(context, absolutePath, false, signal);
+	let directory: FileHandle | undefined;
+	try {
+		directory = await openSecureDirectoryChild(parent, name, signal);
+		const names = await readdir(fdDirectoryListingPath(directory.fd));
+		const entries: SharedSecureDirectoryEntry[] = [];
+		for (const child of names) {
+			throwIfAborted(signal);
+			try {
+				const info = await lstatSecureChild(directory, child);
+				entries.push({
+					name: child,
+					type: info.isSymbolicLink
+						? "symlink"
+						: info.isDirectory
+							? "directory"
+							: info.isFile
+								? "file"
+								: "other",
+				});
+			} catch (error) {
+				if (!isMissing(error)) throw error;
+				entries.push({ name: child, type: "other" });
+			}
+		}
+		return entries;
+	} finally {
+		await directory?.close().catch(() => undefined);
+		if (closeParent) await parent.close().catch(() => undefined);
+	}
 }
 
 export async function withSharedSecureFilesystem<T>(
@@ -3027,6 +3434,11 @@ export async function withSharedSecureFilesystem<T>(
 			writeFile: (path, content, allowCreate, innerSignal = signal) => writeSecureFile(context, absolute(path), content, allowCreate, innerSignal),
 			createFile: (path, content, innerSignal = signal) => createSecureFileExclusive(context, absolute(path), content, innerSignal),
 			stat: (path, innerSignal = signal) => lstatSecureFinal(context, absolute(path), innerSignal),
+			statDetailed: (path, innerSignal = signal) => statSharedSecureFile(context, absolute(path), innerSignal),
+			readBytes: (path, maxBytes, innerSignal = signal) => readSharedSecureBytes(context, absolute(path), maxBytes, innerSignal),
+			consumeBytes: (path, consume, innerSignal = signal) => consumeSharedSecureBytes(context, absolute(path), consume, innerSignal),
+			writeConditional: (path, content, options, innerSignal = signal) => writeSharedSecureConditional(context, absolute(path), content, options, innerSignal),
+			listDirectory: (path, innerSignal = signal) => listSharedSecureDirectory(context, absolute(path), innerSignal),
 		};
 		return await fn(filesystem);
 	} finally {

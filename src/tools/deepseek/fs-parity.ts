@@ -1,20 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import {
-  chmod,
-  link,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { copyFileDaclWin32, replaceFileWin32 } from "./win32.ts";
-import { readTextWindowStreaming, StreamReadError } from "./stream-read.ts";
+import {
+  SharedSecureFileLimitError,
+  type SharedSecureFileInfo,
+  type SharedSecureFilesystem,
+  withSharedSecureFilesystem,
+} from "../codex/engine.ts";
+import { readTextWindowFromChunkProducer, StreamReadError } from "./stream-read.ts";
 
 export type DeepSeekFsErrorCode =
   | "FS_NOT_FOUND"
@@ -66,41 +58,17 @@ function isMissing(error: unknown): boolean {
   );
 }
 
-function isAbort(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" ||
-      ("code" in error && (error as NodeJS.ErrnoException).code === "ABORT_ERR"))
-  );
-}
-
 function throwIfAborted(signal: AbortSignal | undefined, verb: "read" | "write" | "edit"): void {
   if (signal?.aborted) throw new DeepSeekFsError(`${verb} aborted`, "FS_ABORTED");
 }
 
-async function statBigInt(path: string): Promise<any> {
-  return stat(path, { bigint: true });
-}
-
-function pathType(info: any): DeepSeekPathInfo["type"] {
-  if (info.isFile()) return "file";
-  if (info.isDirectory()) return "directory";
-  return "other";
-}
-
-async function probe(path: string): Promise<DeepSeekPathInfo | undefined> {
-  try {
-    const info = await statBigInt(path);
-    return {
-      version: `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`,
-      mode: Number(info.mode & 0o777n),
-      type: pathType(info),
-      size: Number(info.size),
-    };
-  } catch (error) {
-    if (isMissing(error)) return undefined;
-    throw error;
-  }
+function deepSeekInfo(info: SharedSecureFileInfo): DeepSeekPathInfo {
+  return {
+    version: info.version,
+    mode: info.mode,
+    type: info.isFile ? "file" : info.isDirectory ? "directory" : "other",
+    size: info.size,
+  };
 }
 
 async function resolveTarget(cwd: string, path: string): Promise<DeepSeekTarget> {
@@ -152,7 +120,7 @@ async function resolveTarget(cwd: string, path: string): Promise<DeepSeekTarget>
 function assertWithinWorkspace(cwdReal: string, targetKey: string): void {
   const rel = relative(cwdReal, targetKey);
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Path '${targetKey}' is outside the current workspace.`);
+    throw new Error(`Path '${targetKey}' is outside the workspace.`);
   }
 }
 
@@ -235,125 +203,12 @@ function remediate(error: unknown): unknown {
   return error;
 }
 
-async function readRaw(path: string, signal?: AbortSignal): Promise<Buffer> {
+function decodeDiffSnapshot(bytes: Buffer): string | null {
+  if (bytes.includes(0)) return null;
   try {
-    return await readFile(path, signal ? { signal } : undefined);
-  } catch (error) {
-    if (isAbort(error)) throw new DeepSeekFsError("read aborted", "FS_ABORTED", { cause: error });
-    throw error;
-  }
-}
-
-async function readForDiff(path: string, signal?: AbortSignal): Promise<string | null> {
-  try {
-    const info = await statBigInt(path);
-    if (!info.isFile() || Number(info.size) >= DIFF_BASIS_MAX_BYTES) return null;
-    const bytes = await readRaw(path, signal);
-    if (bytes.length !== Number(info.size) || bytes.includes(0)) return null;
-    try {
-      return normalizeDeepSeekLineEndings(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    } catch {
-      return null;
-    }
-  } catch (error) {
-    if (error instanceof DeepSeekFsError) throw error;
-    if (error instanceof Error && "code" in error) return null;
-    throw error;
-  }
-}
-
-async function atomicWrite(
-  targetKey: string,
-  displayPath: string,
-  content: string,
-  mode: number | undefined,
-  signal: AbortSignal | undefined,
-  createIfAbsent: boolean,
-): Promise<void> {
-  throwIfAborted(signal, "write");
-  const directory = dirname(targetKey);
-  await mkdir(directory, { recursive: true });
-  throwIfAborted(signal, "write");
-
-  const stagingDir = resolve(
-    directory,
-    `.${basename(targetKey)}.${process.pid}.${randomUUID()}.tmpdir`,
-  );
-  const tempPath = resolve(stagingDir, `${basename(targetKey)}.tmp`);
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  let stagingCreated = false;
-  try {
-    await mkdir(stagingDir, { mode: 0o700 });
-    stagingCreated = true;
-    await chmod(stagingDir, 0o700);
-    handle = await open(
-      tempPath,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
-      0o600,
-    );
-    await handle.chmod(0o600);
-    if (process.platform === "win32" && mode !== undefined)
-      await copyFileDaclWin32(targetKey, tempPath);
-    await handle.writeFile(content, { encoding: "utf8", ...(signal ? { signal } : {}) });
-    await handle.sync();
-    if (mode !== undefined) await handle.chmod(mode);
-    await handle.close();
-    handle = undefined;
-    throwIfAborted(signal, "write");
-
-    if (createIfAbsent) {
-      try {
-        await link(tempPath, targetKey);
-      } catch (error) {
-        let collision: Awaited<ReturnType<typeof lstat>> | undefined;
-        try {
-          collision = await lstat(targetKey);
-        } catch (metadataError) {
-          if (!isMissing(metadataError)) throw metadataError;
-        }
-        if (collision) {
-          if (!collision.isFile())
-            throw new DeepSeekFsError(
-              `cannot write "${displayPath}": not a regular file`,
-              "FS_NOT_REGULAR_FILE",
-              { cause: error },
-            );
-          throw new DeepSeekFsError(
-            `cannot overwrite existing "${displayPath}" without reading it first`,
-            "FS_NOT_OBSERVED",
-            { cause: error },
-          );
-        }
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          (error as NodeJS.ErrnoException).code === "EEXIST"
-        ) {
-          throw new DeepSeekFsError(
-            `cannot overwrite existing "${displayPath}" without reading it first`,
-            "FS_NOT_OBSERVED",
-            { cause: error },
-          );
-        }
-        throw error;
-      }
-    } else if (process.platform === "win32" && mode !== undefined) {
-      try {
-        await replaceFileWin32(targetKey, tempPath);
-      } catch (error) {
-        if (!isMissing(error)) throw error;
-        await rename(tempPath, targetKey);
-      }
-    } else {
-      await rename(tempPath, targetKey);
-    }
-  } catch (error) {
-    if (isAbort(error)) throw new DeepSeekFsError("write aborted", "FS_ABORTED", { cause: error });
-    throw error;
-  } finally {
-    await handle?.close().catch(() => undefined);
-    if (stagingCreated)
-      await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    return normalizeDeepSeekLineEndings(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
   }
 }
 
@@ -439,6 +294,13 @@ export class DeepSeekFsParity {
     return target;
   }
 
+  private withFilesystem<T>(
+    signal: AbortSignal | undefined,
+    fn: (filesystem: SharedSecureFilesystem) => Promise<T>,
+  ): Promise<T> {
+    return withSharedSecureFilesystem(this.cwd, signal, fn);
+  }
+
   private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(key) ?? Promise.resolve();
     const run = prior.then(fn, fn);
@@ -468,59 +330,102 @@ export class DeepSeekFsParity {
     if (limit > DEEPSEEK_READ_LIMIT)
       throw new Error(`limit must be less than or equal to ${DEEPSEEK_READ_LIMIT}`);
     const target = await this.target(filePath);
-    throwIfAborted(signal, "read");
-    const info = await probe(target.targetKey);
-    if (!info) {
-      this.observations.set(target.targetKey, { kind: "absent" });
-      throw new DeepSeekFsError(`cannot read "${target.displayPath}": not found`, "FS_NOT_FOUND");
-    }
-    if (info.type !== "file")
-      throw new DeepSeekFsError(
-        `cannot read "${target.displayPath}": not a regular file`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    let window: Omit<DeepSeekReadResult, "path" | "offset">;
-    if (info.size >= DEEPSEEK_READ_STREAM_MIN_SIZE) {
-      try {
-        window = await readTextWindowStreaming(target.targetKey, {
-          offset,
-          limit,
-          maxBytes: DEEPSEEK_READ_MAX_BYTES,
-          maxLineLength: DEEPSEEK_READ_MAX_LINE_LENGTH,
-          binarySampleBytes: BINARY_SAMPLE_BYTES,
-          signal,
-        });
-      } catch (error) {
-        if (!(error instanceof StreamReadError)) throw error;
-        if (error.kind === "aborted")
-          throw new DeepSeekFsError("read aborted", "FS_ABORTED", { cause: error });
-        if (error.kind === "binary" || error.kind === "utf8") {
+    return this.withFilesystem(signal, async (filesystem) => {
+      throwIfAborted(signal, "read");
+      const preflight = await filesystem.statDetailed(target.targetKey, signal);
+      if (!preflight) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(`cannot read "${target.displayPath}": not found`, "FS_NOT_FOUND");
+      }
+      if (!preflight.isFile)
+        throw new DeepSeekFsError(
+          `cannot read "${target.displayPath}": not a regular file`,
+          "FS_NOT_REGULAR_FILE",
+        );
+
+      let window: Omit<DeepSeekReadResult, "path" | "offset">;
+      let observedInfo: SharedSecureFileInfo;
+      const stream = async () => {
+        let streamedInfo: SharedSecureFileInfo | undefined;
+        try {
+          window = await readTextWindowFromChunkProducer(
+            async (consume) => {
+              streamedInfo = await filesystem.consumeBytes(target.targetKey, consume, signal);
+              if (!streamedInfo) {
+                this.observations.set(target.targetKey, { kind: "absent" });
+                throw new DeepSeekFsError(
+                  `cannot read "${target.displayPath}": not found`,
+                  "FS_NOT_FOUND",
+                );
+              }
+            },
+            {
+              offset,
+              limit,
+              maxBytes: DEEPSEEK_READ_MAX_BYTES,
+              maxLineLength: DEEPSEEK_READ_MAX_LINE_LENGTH,
+              binarySampleBytes: BINARY_SAMPLE_BYTES,
+              signal,
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof StreamReadError)) throw error;
+          if (error.kind === "aborted")
+            throw new DeepSeekFsError("read aborted", "FS_ABORTED", { cause: error });
+          if (error.kind === "binary" || error.kind === "utf8") {
+            throw new DeepSeekFsError(
+              `cannot read "${target.displayPath}": ${error.kind === "binary" ? "binary file" : "invalid UTF-8 text"}`,
+              "FS_NOT_TEXT",
+              { cause: error },
+            );
+          }
           throw new DeepSeekFsError(
-            `cannot read "${target.displayPath}": ${error.kind === "binary" ? "binary file" : "invalid UTF-8 text"}`,
-            "FS_NOT_TEXT",
+            `offset ${offset} is out of range for "${target.displayPath}" (${preflight.size} byte file)`,
+            "FS_NOT_FOUND",
             { cause: error },
           );
         }
-        throw new DeepSeekFsError(
-          `offset ${offset} is out of range for "${target.displayPath}" (${info.size} byte file)`,
-          "FS_NOT_FOUND",
-          { cause: error },
-        );
+        observedInfo = streamedInfo!;
+      };
+
+      if (preflight.size >= DEEPSEEK_READ_STREAM_MIN_SIZE) {
+        await stream();
+      } else {
+        try {
+          const snapshot = await filesystem.readBytes(
+            target.targetKey,
+            DEEPSEEK_READ_STREAM_MIN_SIZE - 1,
+            signal,
+          );
+          if (!snapshot) {
+            this.observations.set(target.targetKey, { kind: "absent" });
+            throw new DeepSeekFsError(
+              `cannot read "${target.displayPath}": not found`,
+              "FS_NOT_FOUND",
+            );
+          }
+          observedInfo = snapshot.info;
+          const bytes = snapshot.bytes;
+          if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
+            throw new DeepSeekFsError(
+              `cannot read "${target.displayPath}": binary file`,
+              "FS_NOT_TEXT",
+            );
+          }
+          const content = decodeUtf8(bytes, "read", target.displayPath);
+          window = buildReadWindow(content, target.displayPath, offset, limit);
+        } catch (error) {
+          if (!(error instanceof SharedSecureFileLimitError)) throw error;
+          await stream();
+        }
       }
-    } else {
-      const bytes = await readRaw(target.targetKey, signal);
-      throwIfAborted(signal, "read");
-      if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
-        throw new DeepSeekFsError(
-          `cannot read "${target.displayPath}": binary file`,
-          "FS_NOT_TEXT",
-        );
-      }
-      const content = decodeUtf8(bytes, "read", target.displayPath);
-      window = buildReadWindow(content, target.displayPath, offset, limit);
-    }
-    this.observations.set(target.targetKey, { kind: "present", version: info.version });
-    return { path: target.displayPath, offset, ...window };
+
+      this.observations.set(target.targetKey, {
+        kind: "present",
+        version: observedInfo!.version,
+      });
+      return { path: target.displayPath, offset, ...window! };
+    });
   }
 
   async write(
@@ -545,54 +450,87 @@ export class DeepSeekFsParity {
         : { kind: "createIfAbsent" as const };
 
     return this.withLock(target.targetKey, async () => {
-      try {
-        throwIfAborted(signal, "write");
-        const existing = await probe(target.targetKey);
-        if (existing && existing.type !== "file")
-          throw new DeepSeekFsError(
-            `cannot write "${target.displayPath}": not a regular file`,
-            "FS_NOT_REGULAR_FILE",
-          );
-        if (intent.kind === "replaceIfVersion") {
-          if (!existing)
+      return this.withFilesystem(signal, async (filesystem) => {
+        try {
+          throwIfAborted(signal, "write");
+          const existing = await filesystem.statDetailed(target.targetKey, signal);
+          if (existing && !existing.isFile)
             throw new DeepSeekFsError(
-              `cannot write "${target.displayPath}": file no longer exists`,
-              "FS_STALE_VERSION",
+              `cannot write "${target.displayPath}": not a regular file`,
+              "FS_NOT_REGULAR_FILE",
             );
-          if (existing.version !== intent.version)
+          if (intent.kind === "replaceIfVersion") {
+            if (!existing)
+              throw new DeepSeekFsError(
+                `cannot write "${target.displayPath}": file no longer exists`,
+                "FS_STALE_VERSION",
+              );
+            if (existing.version !== intent.version)
+              throw new DeepSeekFsError(
+                `cannot write "${target.displayPath}": file changed since it was read`,
+                "FS_STALE_VERSION",
+              );
+          } else if (existing) {
+            throw new DeepSeekFsError(
+              `cannot overwrite existing "${target.displayPath}" without reading it first`,
+              "FS_NOT_OBSERVED",
+            );
+          }
+
+          let before: string | null = null;
+          if (existing && Buffer.byteLength(content, "utf8") < DIFF_BASIS_MAX_BYTES) {
+            try {
+              const snapshot = await filesystem.readBytes(
+                target.targetKey,
+                DIFF_BASIS_MAX_BYTES - 1,
+                signal,
+              );
+              if (snapshot) {
+                if (intent.kind === "replaceIfVersion" && snapshot.info.version !== intent.version)
+                  throw new DeepSeekFsError(
+                    `cannot write "${target.displayPath}": file changed since it was read`,
+                    "FS_STALE_VERSION",
+                  );
+                before = decodeDiffSnapshot(snapshot.bytes);
+              }
+            } catch (error) {
+              if (!(error instanceof SharedSecureFileLimitError)) throw error;
+            }
+          }
+
+          const committed = await filesystem.writeConditional(
+            target.targetKey,
+            content,
+            intent.kind === "replaceIfVersion"
+              ? { expectedVersion: intent.version }
+              : { createIfAbsent: true },
+            signal,
+          );
+          if (committed.status === "missing" || committed.status === "stale")
             throw new DeepSeekFsError(
               `cannot write "${target.displayPath}": file changed since it was read`,
               "FS_STALE_VERSION",
             );
-        } else if (existing) {
-          throw new DeepSeekFsError(
-            `cannot overwrite existing "${target.displayPath}" without reading it first`,
-            "FS_NOT_OBSERVED",
-          );
+          if (committed.status === "exists")
+            throw new DeepSeekFsError(
+              `cannot overwrite existing "${target.displayPath}" without reading it first`,
+              "FS_NOT_OBSERVED",
+            );
+
+          this.observations.set(target.targetKey, {
+            kind: "present",
+            version: committed.info.version,
+          });
+          return {
+            path: target.displayPath,
+            operation: existing ? "update" : "create",
+            before,
+            after: normalizeDeepSeekLineEndings(content),
+          };
+        } catch (error) {
+          throw remediate(error);
         }
-        const diffable =
-          Boolean(existing) && Buffer.byteLength(content, "utf8") < DIFF_BASIS_MAX_BYTES;
-        const before = diffable ? await readForDiff(target.targetKey, signal) : null;
-        await atomicWrite(
-          target.targetKey,
-          target.displayPath,
-          content,
-          existing?.mode,
-          signal,
-          intent.kind === "createIfAbsent",
-        );
-        const afterInfo = await probe(target.targetKey);
-        if (afterInfo)
-          this.observations.set(target.targetKey, { kind: "present", version: afterInfo.version });
-        return {
-          path: target.displayPath,
-          operation: existing ? "update" : "create",
-          before,
-          after: normalizeDeepSeekLineEndings(content),
-        };
-      } catch (error) {
-        throw remediate(error);
-      }
+      });
     });
   }
 
@@ -623,57 +561,62 @@ export class DeepSeekFsParity {
     const expectedVersion = observed.version;
 
     return this.withLock(target.targetKey, async () => {
-      try {
-        const existing = await probe(target.targetKey);
-        if (!existing)
-          throw new DeepSeekFsError(
-            `cannot edit "${target.displayPath}": file changed since it was read`,
-            "FS_STALE_VERSION",
+      return this.withFilesystem(signal, async (filesystem) => {
+        try {
+          const snapshot = await filesystem.readBytes(target.targetKey, undefined, signal);
+          if (!snapshot)
+            throw new DeepSeekFsError(
+              `cannot edit "${target.displayPath}": file changed since it was read`,
+              "FS_STALE_VERSION",
+            );
+          if (!snapshot.info.isFile)
+            throw new DeepSeekFsError(
+              `cannot edit "${target.displayPath}": not a regular file`,
+              "FS_NOT_REGULAR_FILE",
+            );
+          if (snapshot.info.version !== expectedVersion)
+            throw new DeepSeekFsError(
+              `cannot edit "${target.displayPath}": file changed since it was read`,
+              "FS_STALE_VERSION",
+            );
+          throwIfAborted(signal, "edit");
+          const bytes = snapshot.bytes;
+          if (bytes.includes(0))
+            throw new DeepSeekFsError(
+              `cannot edit "${target.displayPath}": binary file`,
+              "FS_NOT_TEXT",
+            );
+          const raw = decodeUtf8(bytes, "edit", target.displayPath);
+          const lineEndings = detectDeepSeekLineEndings(raw);
+          const before = normalizeDeepSeekLineEndings(raw);
+          const edited = applyDeepSeekLiteralEdit(
+            before,
+            oldString,
+            newString,
+            replaceAll,
+            target.displayPath,
           );
-        if (existing.type !== "file")
-          throw new DeepSeekFsError(
-            `cannot edit "${target.displayPath}": not a regular file`,
-            "FS_NOT_REGULAR_FILE",
+          const storage = restoreDeepSeekLineEndings(edited.content, lineEndings);
+          const committed = await filesystem.writeConditional(
+            target.targetKey,
+            storage,
+            { expectedVersion },
+            signal,
           );
-        if (existing.version !== expectedVersion)
-          throw new DeepSeekFsError(
-            `cannot edit "${target.displayPath}": file changed since it was read`,
-            "FS_STALE_VERSION",
-          );
-        throwIfAborted(signal, "edit");
-        const bytes = await readRaw(target.targetKey, signal);
-        throwIfAborted(signal, "edit");
-        if (bytes.includes(0))
-          throw new DeepSeekFsError(
-            `cannot edit "${target.displayPath}": binary file`,
-            "FS_NOT_TEXT",
-          );
-        const raw = decodeUtf8(bytes, "edit", target.displayPath);
-        const lineEndings = detectDeepSeekLineEndings(raw);
-        const before = normalizeDeepSeekLineEndings(raw);
-        const edited = applyDeepSeekLiteralEdit(
-          before,
-          oldString,
-          newString,
-          replaceAll,
-          target.displayPath,
-        );
-        const storage = restoreDeepSeekLineEndings(edited.content, lineEndings);
-        await atomicWrite(
-          target.targetKey,
-          target.displayPath,
-          storage,
-          existing.mode,
-          signal,
-          false,
-        );
-        const afterInfo = await probe(target.targetKey);
-        if (afterInfo)
-          this.observations.set(target.targetKey, { kind: "present", version: afterInfo.version });
-        return { path: target.displayPath, before, after: edited.content };
-      } catch (error) {
-        throw remediate(error);
-      }
+          if (committed.status !== "written")
+            throw new DeepSeekFsError(
+              `cannot edit "${target.displayPath}": file changed since it was read`,
+              "FS_STALE_VERSION",
+            );
+          this.observations.set(target.targetKey, {
+            kind: "present",
+            version: committed.info.version,
+          });
+          return { path: target.displayPath, before, after: edited.content };
+        } catch (error) {
+          throw remediate(error);
+        }
+      });
     });
   }
 
@@ -682,30 +625,46 @@ export class DeepSeekFsParity {
     signal?: AbortSignal,
   ): Promise<{ target: DeepSeekTarget; info: DeepSeekPathInfo; content?: string }> {
     const target = await this.target(path);
-    throwIfAborted(signal, "read");
-    const info = await probe(target.targetKey);
-    if (!info) {
-      this.observations.set(target.targetKey, { kind: "absent" });
-      throw new DeepSeekFsError(
-        `The path ${target.displayPath} does not exist. Please provide a valid path.`,
-        "FS_NOT_FOUND",
-      );
-    }
-    if (info.type === "directory") return { target, info };
-    if (info.type !== "file") {
-      throw new DeepSeekFsError(
-        `cannot view "${target.displayPath}": not a regular file or directory`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    }
-    const bytes = await readRaw(target.targetKey, signal);
-    throwIfAborted(signal, "read");
-    if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
-      throw new DeepSeekFsError(`cannot read "${target.displayPath}": binary file`, "FS_NOT_TEXT");
-    }
-    const content = decodeUtf8(bytes, "read", target.displayPath);
-    this.observations.set(target.targetKey, { kind: "present", version: info.version });
-    return { target, info, content };
+    return this.withFilesystem(signal, async (filesystem) => {
+      throwIfAborted(signal, "read");
+      const metadata = await filesystem.statDetailed(target.targetKey, signal);
+      if (!metadata) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
+        );
+      }
+      const info = deepSeekInfo(metadata);
+      if (info.type === "directory") return { target, info };
+      if (info.type !== "file") {
+        throw new DeepSeekFsError(
+          `cannot view "${target.displayPath}": not a regular file or directory`,
+          "FS_NOT_REGULAR_FILE",
+        );
+      }
+      const snapshot = await filesystem.readBytes(target.targetKey, undefined, signal);
+      if (!snapshot) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
+        );
+      }
+      const bytes = snapshot.bytes;
+      if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
+        throw new DeepSeekFsError(
+          `cannot read "${target.displayPath}": binary file`,
+          "FS_NOT_TEXT",
+        );
+      }
+      const content = decodeUtf8(bytes, "read", target.displayPath);
+      this.observations.set(target.targetKey, {
+        kind: "present",
+        version: snapshot.info.version,
+      });
+      return { target, info: deepSeekInfo(snapshot.info), content };
+    });
   }
 
   async editorCreate(
@@ -714,15 +673,6 @@ export class DeepSeekFsParity {
     signal?: AbortSignal,
   ): Promise<{ path: string; before: string; after: string }> {
     const target = await this.target(path);
-    throwIfAborted(signal, "write");
-    // str_replace_editor performs an explicit stat before asking for write-intent.
-    // An existing file/directory is rejected by the tool itself, not the provider.
-    const preflight = await probe(target.targetKey);
-    if (preflight) {
-      throw new Error(
-        `File already exists at: ${target.displayPath}. Cannot overwrite files using command \`create\`.`,
-      );
-    }
     const observed = this.observations.get(target.targetKey);
     const intent =
       observed?.kind === "present"
@@ -730,44 +680,38 @@ export class DeepSeekFsParity {
         : { kind: "createIfAbsent" as const };
 
     return this.withLock(target.targetKey, async () => {
-      throwIfAborted(signal, "write");
-      const existing = await probe(target.targetKey);
-      if (existing && existing.type !== "file") {
-        throw new DeepSeekFsError(
-          `cannot write "${target.displayPath}": not a regular file`,
-          "FS_NOT_REGULAR_FILE",
-        );
-      }
-      if (intent.kind === "replaceIfVersion") {
-        if (!existing)
-          throw new DeepSeekFsError(
-            `cannot write "${target.displayPath}": file no longer exists`,
-            "FS_STALE_VERSION",
+      return this.withFilesystem(signal, async (filesystem) => {
+        throwIfAborted(signal, "write");
+        const preflight = await filesystem.statDetailed(target.targetKey, signal);
+        if (preflight) {
+          throw new Error(
+            `File already exists at: ${target.displayPath}. Cannot overwrite files using command \`create\`.`,
           );
-        if (existing.version !== intent.version) {
+        }
+        const committed = await filesystem.writeConditional(
+          target.targetKey,
+          content,
+          intent.kind === "replaceIfVersion"
+            ? { expectedVersion: intent.version }
+            : { createIfAbsent: true },
+          signal,
+        );
+        if (committed.status === "exists") {
+          throw new Error(
+            `File already exists at: ${target.displayPath}. Cannot overwrite files using command \`create\`.`,
+          );
+        }
+        if (committed.status !== "written")
           throw new DeepSeekFsError(
             `cannot write "${target.displayPath}": file changed since it was read`,
             "FS_STALE_VERSION",
           );
-        }
-      } else if (existing) {
-        throw new DeepSeekFsError(
-          `cannot overwrite existing "${target.displayPath}" without reading it first`,
-          "FS_NOT_OBSERVED",
-        );
-      }
-      await atomicWrite(
-        target.targetKey,
-        target.displayPath,
-        content,
-        existing?.mode,
-        signal,
-        intent.kind === "createIfAbsent",
-      );
-      const afterInfo = await probe(target.targetKey);
-      if (afterInfo)
-        this.observations.set(target.targetKey, { kind: "present", version: afterInfo.version });
-      return { path: target.displayPath, before: "", after: content };
+        this.observations.set(target.targetKey, {
+          kind: "present",
+          version: committed.info.version,
+        });
+        return { path: target.displayPath, before: "", after: content };
+      });
     });
   }
 
@@ -799,87 +743,99 @@ export class DeepSeekFsParity {
     if (oldString.length === 0)
       throw new Error("Parameter `old_str` is empty for command: str_replace");
     const replacement = newString ?? "";
-
-    const info = await probe(target.targetKey);
-    if (!info) {
-      this.observations.set(target.targetKey, { kind: "absent" });
-      throw new DeepSeekFsError(
-        `The path ${target.displayPath} does not exist. Please provide a valid path.`,
-        "FS_NOT_FOUND",
-      );
-    }
-    if (info.type === "directory") {
-      throw new DeepSeekFsError(
-        `The path ${target.displayPath} is a directory and only the \`view\` command can be used on directories`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    }
-    if (info.type !== "file")
-      throw new DeepSeekFsError(
-        `cannot edit "${target.displayPath}": not a regular file`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    const expectedVersion = observedVersion ?? info.version;
-    const bytes = await readRaw(target.targetKey, signal);
-    if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
-      throw new DeepSeekFsError(`cannot read "${target.displayPath}": binary file`, "FS_NOT_TEXT");
-    }
-    const before = decodeUtf8(bytes, "read", target.displayPath);
-    const offsets: number[] = [];
-    let cursor = 0;
-    while (true) {
-      const match = before.indexOf(oldString, cursor);
-      if (match < 0) break;
-      offsets.push(match);
-      cursor = match + oldString.length;
-    }
-    const offset = offsets[0];
-    if (offset === undefined) {
-      throw new DeepSeekFsError(
-        `No replacement was performed, old_str \`${oldString}\` did not appear verbatim in ${target.displayPath}.`,
-        "FS_EDIT_NOT_FOUND",
-      );
-    }
-    if (offsets.length > 1) {
-      let line = 1;
-      let scan = 0;
-      const lines = offsets.map((matchOffset) => {
-        while (scan < matchOffset) {
-          if (before[scan] === "\n") line += 1;
-          scan += 1;
-        }
-        return line;
-      });
-      throw new DeepSeekFsError(
-        `No replacement was performed. Multiple occurrences of old_str \`${oldString}\` in lines [${lines.join(", ")}]. Please ensure it is unique`,
-        "FS_AMBIGUOUS_EDIT",
-      );
-    }
-    const after = before.slice(0, offset) + replacement + before.slice(offset + oldString.length);
-
-    return this.withLock(target.targetKey, async () => {
-      const current = await probe(target.targetKey);
-      if (!current)
+    return this.withFilesystem(signal, async (filesystem) => {
+      const metadata = await filesystem.statDetailed(target.targetKey, signal);
+      if (!metadata) {
+        this.observations.set(target.targetKey, { kind: "absent" });
         throw new DeepSeekFsError(
-          `cannot write "${target.displayPath}": file no longer exists`,
-          "FS_STALE_VERSION",
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
         );
-      if (current.type !== "file")
+      }
+      if (metadata.isDirectory) {
         throw new DeepSeekFsError(
-          `cannot write "${target.displayPath}": not a regular file`,
+          `The path ${target.displayPath} is a directory and only the \`view\` command can be used on directories`,
           "FS_NOT_REGULAR_FILE",
         );
-      if (current.version !== expectedVersion) {
+      }
+      if (!metadata.isFile)
+        throw new DeepSeekFsError(
+          `cannot edit "${target.displayPath}": not a regular file`,
+          "FS_NOT_REGULAR_FILE",
+        );
+
+      const snapshot = await filesystem.readBytes(target.targetKey, undefined, signal);
+      if (!snapshot) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
+        );
+      }
+      const expectedVersion = observedVersion ?? snapshot.info.version;
+      if (observedVersion !== undefined && snapshot.info.version !== observedVersion)
         throw new DeepSeekFsError(
           `cannot write "${target.displayPath}": file changed since it was read`,
           "FS_STALE_VERSION",
         );
+      const bytes = snapshot.bytes;
+      if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
+        throw new DeepSeekFsError(
+          `cannot read "${target.displayPath}": binary file`,
+          "FS_NOT_TEXT",
+        );
       }
-      await atomicWrite(target.targetKey, target.displayPath, after, current.mode, signal, false);
-      const afterInfo = await probe(target.targetKey);
-      if (afterInfo)
-        this.observations.set(target.targetKey, { kind: "present", version: afterInfo.version });
-      return { path: target.displayPath, before, after };
+      const before = decodeUtf8(bytes, "read", target.displayPath);
+      const offsets: number[] = [];
+      let cursor = 0;
+      while (true) {
+        const match = before.indexOf(oldString, cursor);
+        if (match < 0) break;
+        offsets.push(match);
+        cursor = match + oldString.length;
+      }
+      const offset = offsets[0];
+      if (offset === undefined) {
+        throw new DeepSeekFsError(
+          `No replacement was performed, old_str \`${oldString}\` did not appear verbatim in ${target.displayPath}.`,
+          "FS_EDIT_NOT_FOUND",
+        );
+      }
+      if (offsets.length > 1) {
+        let line = 1;
+        let scan = 0;
+        const lines = offsets.map((matchOffset) => {
+          while (scan < matchOffset) {
+            if (before[scan] === "\n") line += 1;
+            scan += 1;
+          }
+          return line;
+        });
+        throw new DeepSeekFsError(
+          `No replacement was performed. Multiple occurrences of old_str \`${oldString}\` in lines [${lines.join(", ")}]. Please ensure it is unique`,
+          "FS_AMBIGUOUS_EDIT",
+        );
+      }
+      const after = before.slice(0, offset) + replacement + before.slice(offset + oldString.length);
+
+      return this.withLock(target.targetKey, async () => {
+        const committed = await filesystem.writeConditional(
+          target.targetKey,
+          after,
+          { expectedVersion },
+          signal,
+        );
+        if (committed.status !== "written")
+          throw new DeepSeekFsError(
+            `cannot write "${target.displayPath}": file changed since it was read`,
+            "FS_STALE_VERSION",
+          );
+        this.observations.set(target.targetKey, {
+          kind: "present",
+          version: committed.info.version,
+        });
+        return { path: target.displayPath, before, after };
+      });
     });
   }
 
@@ -905,67 +861,116 @@ export class DeepSeekFsParity {
       observedVersion = observed.version;
     }
 
-    const info = await probe(target.targetKey);
-    if (!info) {
-      this.observations.set(target.targetKey, { kind: "absent" });
-      throw new DeepSeekFsError(
-        `The path ${target.displayPath} does not exist. Please provide a valid path.`,
-        "FS_NOT_FOUND",
-      );
-    }
-    if (info.type === "directory") {
-      throw new DeepSeekFsError(
-        `The path ${target.displayPath} is a directory and only the \`view\` command can be used on directories`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    }
-    if (info.type !== "file")
-      throw new DeepSeekFsError(
-        `cannot insert into "${target.displayPath}": not a regular file`,
-        "FS_NOT_REGULAR_FILE",
-      );
-    const expectedVersion = observedVersion ?? info.version;
-    const bytes = await readRaw(target.targetKey, signal);
-    if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
-      throw new DeepSeekFsError(`cannot read "${target.displayPath}": binary file`, "FS_NOT_TEXT");
-    }
-    const before = decodeUtf8(bytes, "read", target.displayPath);
-    const lines = before.split("\n");
-    if (!Number.isInteger(insertLine) || insertLine < 0 || insertLine > lines.length) {
-      throw new Error(
-        `Invalid \`insert_line\` parameter: ${insertLine}. It should be within the range of lines of the file: [0, ${lines.length}]`,
-      );
-    }
-    const after = [
-      ...lines.slice(0, insertLine),
-      ...newString.split("\n"),
-      ...lines.slice(insertLine),
-    ].join("\n");
-
-    return this.withLock(target.targetKey, async () => {
-      const current = await probe(target.targetKey);
-      if (!current)
+    return this.withFilesystem(signal, async (filesystem) => {
+      const metadata = await filesystem.statDetailed(target.targetKey, signal);
+      if (!metadata) {
+        this.observations.set(target.targetKey, { kind: "absent" });
         throw new DeepSeekFsError(
-          `cannot write "${target.displayPath}": file no longer exists`,
-          "FS_STALE_VERSION",
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
         );
-      if (current.type !== "file")
+      }
+      if (metadata.isDirectory) {
         throw new DeepSeekFsError(
-          `cannot write "${target.displayPath}": not a regular file`,
+          `The path ${target.displayPath} is a directory and only the \`view\` command can be used on directories`,
           "FS_NOT_REGULAR_FILE",
         );
-      if (current.version !== expectedVersion) {
+      }
+      if (!metadata.isFile)
+        throw new DeepSeekFsError(
+          `cannot insert into "${target.displayPath}": not a regular file`,
+          "FS_NOT_REGULAR_FILE",
+        );
+
+      const snapshot = await filesystem.readBytes(target.targetKey, undefined, signal);
+      if (!snapshot) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(
+          `The path ${target.displayPath} does not exist. Please provide a valid path.`,
+          "FS_NOT_FOUND",
+        );
+      }
+      const expectedVersion = observedVersion ?? snapshot.info.version;
+      if (observedVersion !== undefined && snapshot.info.version !== observedVersion)
         throw new DeepSeekFsError(
           `cannot write "${target.displayPath}": file changed since it was read`,
           "FS_STALE_VERSION",
         );
+      const bytes = snapshot.bytes;
+      if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
+        throw new DeepSeekFsError(
+          `cannot read "${target.displayPath}": binary file`,
+          "FS_NOT_TEXT",
+        );
       }
-      await atomicWrite(target.targetKey, target.displayPath, after, current.mode, signal, false);
-      const afterInfo = await probe(target.targetKey);
-      if (afterInfo)
-        this.observations.set(target.targetKey, { kind: "present", version: afterInfo.version });
-      return { path: target.displayPath, before, after };
+      const before = decodeUtf8(bytes, "read", target.displayPath);
+      const lines = before.split("\n");
+      if (!Number.isInteger(insertLine) || insertLine < 0 || insertLine > lines.length) {
+        throw new Error(
+          `Invalid \`insert_line\` parameter: ${insertLine}. It should be within the range of lines of the file: [0, ${lines.length}]`,
+        );
+      }
+      const after = [
+        ...lines.slice(0, insertLine),
+        ...newString.split("\n"),
+        ...lines.slice(insertLine),
+      ].join("\n");
+
+      return this.withLock(target.targetKey, async () => {
+        const committed = await filesystem.writeConditional(
+          target.targetKey,
+          after,
+          { expectedVersion },
+          signal,
+        );
+        if (committed.status !== "written")
+          throw new DeepSeekFsError(
+            `cannot write "${target.displayPath}": file changed since it was read`,
+            "FS_STALE_VERSION",
+          );
+        this.observations.set(target.targetKey, {
+          kind: "present",
+          version: committed.info.version,
+        });
+        return { path: target.displayPath, before, after };
+      });
     });
+  }
+
+  async readImageSnapshot(
+    path: string,
+    maxBytes: number,
+    signal?: AbortSignal,
+  ): Promise<{ target: DeepSeekTarget; info: DeepSeekPathInfo; bytes: Buffer }> {
+    const target = await this.target(path);
+    return this.withFilesystem(signal, async (filesystem) => {
+      throwIfAborted(signal, "read");
+      const snapshot = await filesystem.readBytes(target.targetKey, maxBytes, signal);
+      if (!snapshot) {
+        this.observations.set(target.targetKey, { kind: "absent" });
+        throw new DeepSeekFsError(`cannot read "${target.displayPath}": not found`, "FS_NOT_FOUND");
+      }
+      if (!snapshot.info.isFile)
+        throw new DeepSeekFsError(
+          `cannot read "${target.displayPath}": not a regular file`,
+          "FS_NOT_REGULAR_FILE",
+        );
+      return { target, info: deepSeekInfo(snapshot.info), bytes: snapshot.bytes };
+    });
+  }
+
+  recordSuccessfulReadObservation(target: DeepSeekTarget, info: DeepSeekPathInfo): void {
+    this.observations.set(target.targetKey, { kind: "present", version: info.version });
+  }
+
+  async listDirectoryEntries(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<Array<{ name: string; type: "file" | "directory" | "symlink" | "other" }>> {
+    const target = await this.target(path);
+    return this.withFilesystem(signal, (filesystem) =>
+      filesystem.listDirectory(target.targetKey, signal),
+    );
   }
 
   async observeAbsolutePath(
@@ -973,13 +978,16 @@ export class DeepSeekFsParity {
     signal?: AbortSignal,
   ): Promise<{ target: DeepSeekTarget; info?: DeepSeekPathInfo }> {
     const target = await this.target(path);
-    throwIfAborted(signal, "read");
-    const info = await probe(target.targetKey);
-    this.observations.set(
-      target.targetKey,
-      info ? { kind: "present", version: info.version } : { kind: "absent" },
-    );
-    return { target, info };
+    return this.withFilesystem(signal, async (filesystem) => {
+      throwIfAborted(signal, "read");
+      const metadata = await filesystem.statDetailed(target.targetKey, signal);
+      const info = metadata ? deepSeekInfo(metadata) : undefined;
+      this.observations.set(
+        target.targetKey,
+        info ? { kind: "present", version: info.version } : { kind: "absent" },
+      );
+      return { target, info };
+    });
   }
 
   async expectedVersion(path: string): Promise<string | undefined> {

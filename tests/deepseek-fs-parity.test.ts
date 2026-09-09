@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, symlink, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexFilesystemBackend, withSharedSecureFilesystem } from "../src/tools/codex/engine.ts";
 import {
   DeepSeekFsParity,
   formatDeepSeekEditOutput,
@@ -166,6 +167,46 @@ test(
       assert.equal(await readFile(target, "utf8"), "new\n");
       assert.equal((await (await import("node:fs/promises")).lstat(alias)).isSymbolicLink(), true);
     }),
+);
+
+test(
+  "shared secure filesystem refuses parent-symlink redirection after validation",
+  { skip: process.platform === "win32" || codexFilesystemBackend() !== "secure" },
+  async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-dsh-secure-race-"));
+    const outside = await mkdtemp(join(tmpdir(), "pi-dsh-secure-race-outside-"));
+    try {
+      const safe = join(cwd, "safe");
+      const moved = join(cwd, "safe-original");
+      const target = join(safe, "target.txt");
+      const outsideTarget = join(outside, "target.txt");
+      await (await import("node:fs/promises")).mkdir(safe);
+      await writeFile(target, "inside\n");
+      await writeFile(outsideTarget, "outside\n");
+
+      await withSharedSecureFilesystem(cwd, undefined, async (filesystem) => {
+        const observed = await filesystem.statDetailed(target);
+        assert.ok(observed?.isFile);
+
+        await rename(safe, moved);
+        await symlink(outside, safe, "dir");
+
+        await assert.rejects(
+          () =>
+            filesystem.writeConditional(target, "redirected\n", {
+              expectedVersion: observed.version,
+            }),
+          /symlink|security|not a directory|refus/i,
+        );
+      });
+
+      assert.equal(await readFile(outsideTarget, "utf8"), "outside\n");
+      assert.equal(await readFile(join(moved, "target.txt"), "utf8"), "inside\n");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  },
 );
 
 test("argument validation mirrors tool-fs parsers", async () =>

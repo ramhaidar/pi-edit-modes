@@ -35,11 +35,11 @@ See [Gemini mode](docs/GEMINI.md) for the focused contract and [Tool flows and p
 
 ### DeepSeek
 
-`standard` exposes Harness-shaped `read`, `write`, and `edit`, plus conditional `read_image`. Reads are concurrent; mutations are sequential/exclusive; reads at 10 MiB and above stream; observation/version state is session + workspace scoped.
+`standard` exposes Harness-shaped `read`, `write`, and `edit`, plus conditional `read_image`. Reads are concurrent; mutations are sequential/exclusive; reads at 10 MiB and above stream; observation/version state is session + workspace scoped. DeepSeek file I/O uses the same descriptor/openat secure-filesystem seam as Codex/Gemini where available; the portable fallback remains best-effort, and `PI_APPLY_PATCH_REQUIRE_SECURE_FS=1` fails closed when a secure backend is unavailable.
 
-`minimal` exposes sequential/exclusive `str_replace_editor` with `view`, `create`, `str_replace`, and `insert`. Matching the shipped minimal preset, `str_replace`/`insert` do not require a prior `view` and the editor contributes no standalone prompt section. Directory views do not follow symlinked directories and use upstream `d` / `f` / `?` markers. Pi deliberately keeps minimal editor paths confined to the workspace even though current upstream minimal uses bare `fs-local`; shell guidance names only active mutation tools.
+`minimal` exposes sequential/exclusive `str_replace_editor` with `view`, `create`, `str_replace`, and `insert`. Matching the shipped minimal preset, `str_replace`/`insert` do not require a prior `view` and the editor contributes no standalone prompt section. Directory views do not follow symlinked directories and use upstream `d` / `f` / `?` markers. Pi deliberately keeps minimal editor paths confined to the workspace even though current upstream minimal uses bare `fs-local`. Strict DeepSeek surfaces preserve upstream shell descriptions; Pi-specific mutation guidance is limited to the explicitly hybrid/additive surface.
 
-Pi does not expose Harness's durable attachment store, so `read_image` returns a normalized native image block directly. See [DeepSeek mode](docs/DEEPSEEK.md) for the focused contract.
+`read_image` enforces the Harness PNG/JPEG/WebP/GIF extension/content contract plus the current local-store admission defaults (5 MiB source, 2000 px maximum side, 40M intrinsic pixels), records the exact version that produced a successful image read into the shared observation lifecycle, emits the Harness text envelope, and returns a normalized native image block. Pi does not expose Harness's durable attachment store, so attachment persistence remains a host-level divergence. See [DeepSeek mode](docs/DEEPSEEK.md) for the focused contract.
 
 ### Codex
 

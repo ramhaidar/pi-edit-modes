@@ -25,7 +25,7 @@ Coverage includes:
 
 - mode resolution, settings migration/persistence, strict/additive routing, and provider wire filtering
 - Gemini create/recovery/correction/approval behavior, workspace path confinement (relative, absolute, symlink, and commit-time redirect cases), sensitive-path blocking, generic untrusted-path preflight, configurable ignore-aware bounded relative-path correction, upstream-shaped declaration-only prompt conditioning, secondary no-change error semantics, corrected-retry original-error fallback, whole-proposed-file manual modification, fuzzy match line feedback, omission validation, session-scoped prepared proposals, post-tool updated-code context, model-family descriptions, and host-OS new-file line endings
-- DeepSeek observation and stale-version semantics, session isolation, standard observation-policy enforcement, shipped-minimal no-prior-view mutation flow, standard and minimal exclusive mutation scheduling, active-tool-specific shell guidance, no standalone minimal editor prompt contribution, large-file streaming, image validation/normalization, `str_replace_editor`, and no-follow directory listing/marker semantics
+- DeepSeek observation and stale-version semantics, session isolation, standard observation-policy enforcement, shipped-minimal no-prior-view mutation flow, standard and minimal exclusive mutation scheduling, single-copy standard Harness prompt guidance, upstream-shaped declaration-only `read_image` conditioning, exact PNG/JPEG/WebP/GIF runtime admission plus current-default 5 MiB/2000 px/40M-pixel limits, image observation lifecycle/Harness result envelope, shared descriptor/openat secure filesystem with portable best-effort fallback, strict-shell-description preservation with additive-only Pi guidance, no standalone minimal editor prompt contribution, large-file streaming, image validation/normalization, `str_replace_editor`, and no-follow directory listing/marker semantics
 - Codex Environment ID grammar/execution rejection on a single-environment host
 - shared diff rendering
 
@@ -42,6 +42,8 @@ pnpm fetch-vendors
 ```
 
 Use `--force` to re-download even when the recorded SHA matches. `vendor/.state.json` records fetched SHAs and is managed by the fetch script.
+
+`scripts/fetch-vendors.mjs` is included in the published package because `package.json` exposes `pnpm fetch-vendors`; keep the script and the documented command in sync with the package `files` allowlist.
 
 ## Packaging
 

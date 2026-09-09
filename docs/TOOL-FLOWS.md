@@ -60,7 +60,7 @@ Both Gemini mutation tools use the shared secure filesystem facade and file muta
 
 Before proposal calculation, Gemini also applies Gemini-style defensive path normalization: null bytes are stripped, accidental `@` reference prefixes are normalized when appropriate, URI/file-URL input is decoded, and existing symlink ancestors are canonicalized. Relative parent escapes, absolute paths outside the workspace, canonical targets outside the workspace, and blocked sensitive segments (`.git`, `.env`, `node_modules`, `gha-creds-*.json`, including upstream case/NTFS alias handling) are rejected as `PATH_NOT_IN_WORKSPACE`; safe in-workspace symlinks resolve to their canonical in-workspace target. Blocking happens before file reads and optional correction-model calls. Execution repeats validation before the mutation and again immediately before commit.
 
-Resolved model-generated paths also use Gemini CLI's generic preflight checks for control characters, common log/error fragments, suspicious long quote/ellipsis forms, the 4096-character path limit, and the 255-character component limit. Relative `replace` targets additionally use a bounded 50-directory suffix/basename search when the direct path is missing. That fallback discovery respects `.gitignore` (including nested ignore files in Git workspaces) and root `.geminiignore` by default; `gemini.fileFiltering` can disable either ignore family and add `customIgnoreFilePaths`. A unique visible match is corrected and ambiguous visible matches are rejected.
+Resolved model-generated paths also use Gemini CLI's generic preflight checks for control characters, common log/error fragments, suspicious long quote/ellipsis forms, the 4096-character path limit, and the 255-character component limit. Relative `replace` targets additionally use a bounded 50-directory suffix/basename search when the direct path is missing. That fallback discovery respects `.gitignore` (including nested ignore files in Git workspaces) and root `.geminiignore` by default; `gemini.fileFiltering` can disable either ignore family and add project-root-relative `customIgnoreFilePaths`. A unique visible match is corrected and ambiguous visible matches are rejected.
 
 Pi currently exposes a single workspace root (`ctx.cwd`) to this extension, so fallback correction searches that root only. Gemini CLI can search every configured `WorkspaceContext` directory in multi-root sessions; this remains a host-architecture divergence until Pi exposes an equivalent multi-root workspace API.
 
@@ -94,11 +94,14 @@ The Gemini tool registrations also avoid Pi-only `promptSnippet` / `promptGuidel
 - `read(file_path, offset?, limit?)` returns Harness-style line windows and records the observation used by later guarded writes/edits.
 - `write(file_path, content)` creates or fully replaces UTF-8 text. Existing-file overwrite requires a current observation and uses stale-version/no-clobber checks.
 - `edit(file_path, old_string, new_string, replace_all?)` performs literal replacement with unique-match-by-default semantics and uses the same observation/version state.
-- `read_image(file_path)` is added only when the current model supports image input. It resolves the real target, refuses files outside the current workspace, validates the actual image bytes, and normalizes/resizes supported images through Pi's image pipeline before returning a native image block.
+- `read`, `write`, and `edit` project their current Harness system-prompt section once through Pi's `promptSnippet` field; the extension does not add a second paraphrased guideline copy.
+- `read_image(file_path)` is added only when the current model supports image input. Its declaration text and `file_path` description mirror current Harness, including extension-less/content-detected PNG/JPEG/WebP/GIF handling and normalization/concurrency guidance, and it adds no standalone prompt snippet/guidelines. Runtime rejects blank paths, unsupported extensions such as BMP, declared-extension/content mismatches, source reads over the current Harness local-store default of 5 MiB, sides over 2000 px, and intrinsic images over 40M pixels; supported extension-less images are accepted by content signature. The secure read snapshot supplies both bytes and the version recorded after successful normalization/admission, so image reads participate in the same observation lifecycle as text reads. Missing targets record an absent observation. The tool returns the Harness `<path>/<type>/<content>` text envelope beside the native normalized image block. Pi cannot inherit deployment-specific Harness attachment-store limit overrides because that store is not exposed to extensions.
 
 Observation/version state is scoped by both Pi session ID and workspace path. Two sessions in the same directory therefore do not share filesystem observations.
 
 `read` remains parallel. `write` and `edit` are sequential/exclusive scheduler operations. Text reads switch to a bounded streaming path at 10 MiB, preserving line-window/output limits without loading the entire large file into memory.
+
+DeepSeek filesystem operations use the shared Codex/Gemini secure-filesystem facade. On the descriptor/openat backend, file snapshots, directory traversal, and CAS writes are anchored to opened descriptors; mutation versions are checked on the opened target immediately before writing, so a concurrently substituted path cannot redirect the operation outside the checked workspace. The portable Node fallback retains best-effort symlink checks and a path-based TOCTOU window; `PI_APPLY_PATCH_REQUIRE_SECURE_FS=1` makes the host fail closed when the descriptor/openat backend is unavailable.
 
 Pi's extension API does not currently expose DeepSeek Harness's durable attachment-store service, so `read_image` returns the normalized native image block directly rather than persisting an attachment reference. This is an explicit host-capability divergence, not a model-facing name/schema divergence.
 
@@ -112,17 +115,13 @@ On `replace`, `str_replace_editor` is not exposed by the standard preset. On `ad
 
 Directory `view` uses `lstat` and does not recurse through symlinked directories. Model-facing directory markers follow upstream: `d` for directory, `f` for file, and `?` for symlinks/other entries. The `?` marker does not change the no-follow traversal behavior.
 
-Unlike the current shipped Harness minimal preset's bare `fs-local`, Pi retains workspace confinement for all minimal editor paths. This is a deliberate safer host divergence: the model-facing editor vocabulary and mutation flow are aligned, but paths outside the Pi workspace remain inaccessible.
+Unlike the current shipped Harness minimal preset's bare `fs-local`, Pi retains workspace confinement for all minimal editor paths. This is a deliberate safer host divergence. On the secure descriptor/openat backend the fence is race-resistant; on the portable fallback it has the best-effort limitation described above.
 
 ### Shell guidance
 
-Provider-facing shell descriptions are conditioned on the mutation tools that are actually active:
+Strict DeepSeek parity surfaces do not rewrite provider shell descriptions. This keeps `standard` and `minimal` model-facing shell conditioning upstream-shaped instead of appending Pi-specific filesystem-mutation prohibitions.
 
-- strict `standard`: `write` / `edit`
-- strict `minimal`: `str_replace_editor`
-- additive/hybrid: all active mutation editors may be named
-
-The guidance tells the model not to mutate files through shell redirection, PowerShell write commands, `sed -i`, scripts, and similar mechanisms. This Pi-specific shell-description conditioning is guidance, not a standalone `str_replace_editor` system-prompt contribution and not a security boundary; containment and mutation checks come from the actual filesystem/runtime controls.
+The explicit `deepseek-additive` hybrid surface may append Pi guidance that names all active mutation editors and discourages shell-based file mutation. This additive-only conditioning is not part of strict Harness parity and is not a security boundary; containment and mutation checks come from the actual filesystem/runtime controls.
 
 ### Sandbox escalation fields
 
@@ -149,6 +148,7 @@ Before each provider request, the extension treats the selected strict roster as
 - Pi mode removes managed custom file-edit tools.
 - Codex mode removes Gemini and DeepSeek custom tools and validates `apply_patch` transport.
 - Gemini mode removes Codex, DeepSeek, deprecated Gemini aliases, and native `edit`/`write` on the strict surface. It also rewrites `replace`/`write_file` descriptions and parameter descriptions to the active upstream Gemini model-family contract before each provider request.
+- Gemini family selection operates on Pi's concrete `ctx.model.id`; Gemini CLI alias resolution (`auto`/`pro`/`flash`) and dynamic family metadata remain host-routing differences unless Pi has already resolved the model to a concrete ID.
 - DeepSeek `standard` strict mode removes Codex, Gemini, and `str_replace_editor`; it keeps the standard Harness filesystem family.
 - DeepSeek `minimal` strict mode removes Codex, Gemini, and native `read`/`edit`/`write`; it keeps `str_replace_editor`.
 - OpenAI/Anthropic-style top-level tool arrays and native Google `config.tools[].functionDeclarations[]` are handled.

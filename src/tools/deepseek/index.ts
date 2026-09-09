@@ -1,5 +1,4 @@
 import { isAbsolute, resolve } from "node:path";
-import { lstat, readdir } from "node:fs/promises";
 import { generateDiffString, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -69,13 +68,14 @@ export function deepSeekDirectoryEntryMarker(
 }
 
 async function directoryListing(
+  runtime: ReturnType<typeof getDeepSeekFsRuntime>,
   displayPath: string,
   targetKey: string,
   signal?: AbortSignal,
 ): Promise<string> {
   async function visit(displayDir: string, actualDir: string, depth: number): Promise<string[]> {
     if (signal?.aborted) throw new Error("list aborted");
-    const entries = await readdir(actualDir, { withFileTypes: true });
+    const entries = await runtime.listDirectoryEntries(actualDir, signal);
     const rows: string[] = [];
     for (const entry of entries.filter(
       (candidate) =>
@@ -86,22 +86,7 @@ async function directoryListing(
       if (signal?.aborted) throw new Error("list aborted");
       const actualChild = resolve(actualDir, entry.name);
       const displayChild = resolve(displayDir, entry.name);
-      let type: "file" | "directory" | "symlink" | "other" = "other";
-      try {
-        // Do not follow directory symlinks here. editorView has already resolved
-        // and fenced the requested root; recursive traversal must not escape that
-        // fence through a child link.
-        const info = await lstat(actualChild);
-        type = info.isSymbolicLink()
-          ? "symlink"
-          : info.isDirectory()
-            ? "directory"
-            : info.isFile()
-              ? "file"
-              : "other";
-      } catch {
-        type = "other";
-      }
+      const type = entry.type;
       rows.push(`${deepSeekDirectoryEntryMarker(type)}\t${displayChild}`);
       if (type === "directory" && depth < 2)
         rows.push(...(await visit(displayChild, actualChild, depth + 1)));
@@ -253,6 +238,7 @@ export function registerDeepSeekTool(pi: ExtensionAPI): void {
               {
                 type: "text",
                 text: await directoryListing(
+                  runtime,
                   viewed.target.displayPath,
                   viewed.target.targetKey,
                   signal,

@@ -2,16 +2,14 @@ import {
   createEditToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
-  detectSupportedImageMimeTypeFromFile,
-  formatDimensionNote,
   generateDiffString,
   resizeImage,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { extname } from "node:path";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { SharedSecureFileLimitError } from "../codex/engine.ts";
 import {
   DEEPSEEK_READ_LIMIT,
   formatDeepSeekEditOutput,
@@ -133,9 +131,6 @@ function registerDeepSeekRead(pi: ExtensionAPI): void {
     description: "Read a UTF-8 text file and return line-numbered content.",
     promptSnippet:
       "Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.",
-    promptGuidelines: [
-      "Use read instead of shell commands like cat to inspect text files; use offset and limit to continue reading large files.",
-    ],
     parameters: Type.Object(
       {
         file_path: Type.String({
@@ -167,32 +162,97 @@ function registerDeepSeekRead(pi: ExtensionAPI): void {
   });
 }
 
-async function fencedImagePath(cwd: string, filePath: string): Promise<string> {
-  const workspace = await realpath(cwd);
-  const requested = isAbsolute(filePath) ? resolve(filePath) : resolve(cwd, filePath);
-  const target = await realpath(requested);
-  const rel = relative(workspace, target);
-  if (
-    rel === ".." ||
-    rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(rel)
-  ) {
-    throw new Error(`Path '${filePath}' resolves outside the workspace`);
+type DeepSeekImageMimeType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+
+export const DEEPSEEK_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const DEEPSEEK_IMAGE_MAX_DIMENSION = 2000;
+export const DEEPSEEK_IMAGE_MAX_PIXELS = 40_000_000;
+
+const DEEPSEEK_IMAGE_EXTENSIONS: Readonly<Record<string, DeepSeekImageMimeType>> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+function bytesMatch(data: Uint8Array, offset: number, expected: readonly number[]): boolean {
+  if (data.byteLength < offset + expected.length) return false;
+  return expected.every((byte, index) => data[offset + index] === byte);
+}
+
+function asciiMatches(data: Uint8Array, offset: number, expected: string): boolean {
+  if (data.byteLength < offset + expected.length) return false;
+  for (let index = 0; index < expected.length; index += 1) {
+    if (data[offset + index] !== expected.charCodeAt(index)) return false;
   }
-  const info = await stat(target);
-  if (!info.isFile()) throw new Error(`Path '${filePath}' is not a file`);
-  return target;
+  return true;
+}
+
+function sniffDeepSeekImageMimeType(data: Uint8Array): DeepSeekImageMimeType | undefined {
+  if (bytesMatch(data, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (bytesMatch(data, 0, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (asciiMatches(data, 0, "GIF87a") || asciiMatches(data, 0, "GIF89a")) return "image/gif";
+  if (asciiMatches(data, 0, "RIFF") && asciiMatches(data, 8, "WEBP")) return "image/webp";
+  return undefined;
+}
+
+function formatDeepSeekImageReadOutput(
+  displayPath: string,
+  image: {
+    mimeType: string;
+    bytes: number;
+    width: number;
+    height: number;
+    originalWidth: number;
+    originalHeight: number;
+    wasResized: boolean;
+  },
+): string {
+  let scaled = "";
+  if (image.wasResized) {
+    const x = (image.originalWidth / image.width).toFixed(2);
+    const y = (image.originalHeight / image.height).toFixed(2);
+    const advice =
+      x === y
+        ? `multiply coordinates by ${x}`
+        : `multiply x coordinates by ${x} and y coordinates by ${y}`;
+    scaled = ` (downscaled from ${image.originalWidth}x${image.originalHeight} px; ${advice} to locate features in the original file)`;
+  }
+  return `<path>${displayPath}</path>\n<type>image</type>\n<content>\n${image.mimeType} image, ${image.width}x${image.height} px, ${image.bytes} bytes${scaled}\n</content>`;
+}
+
+export function assertDeepSeekImageDimensions(
+  displayPath: string,
+  width: number,
+  height: number,
+): void {
+  if (width > DEEPSEEK_IMAGE_MAX_DIMENSION || height > DEEPSEEK_IMAGE_MAX_DIMENSION) {
+    throw new Error(
+      `cannot read "${displayPath}": at least one image side exceeds the ${DEEPSEEK_IMAGE_MAX_DIMENSION}px limit; downscale the image and read the smaller copy`,
+    );
+  }
+  if (width * height > DEEPSEEK_IMAGE_MAX_PIXELS) {
+    throw new Error(
+      `cannot read "${displayPath}": the image exceeds the ${DEEPSEEK_IMAGE_MAX_PIXELS}-pixel decoded-size limit; downscale the image and read the smaller copy`,
+    );
+  }
 }
 
 export function registerDeepSeekReadImageTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "read_image",
     label: "read_image",
-    description: "Read an image file and return it as a model image attachment.",
-    promptSnippet: "Use read_image to inspect image files when image input is available.",
+    description:
+      "Read a PNG/JPEG/WebP/GIF file and return the image itself. " +
+      "A path without a file extension is accepted; the format is detected from the file content, so normalized attachment paths can be passed directly without copying or renaming. " +
+      "Harness validates and downscales large supported images before the next model request, so use this tool directly instead of installing image libraries or creating thumbnails merely to inspect an image. " +
+      "Independent files may be read concurrently in small batches. Requires the current model to accept image input.",
     parameters: Type.Object(
       {
-        file_path: Type.String({ description: "Path to the image file." }),
+        file_path: Type.String({
+          description: "Path to the image file, resolved by the filesystem backend.",
+        }),
       },
       { additionalProperties: false },
     ),
@@ -201,25 +261,75 @@ export function registerDeepSeekReadImageTool(pi: ExtensionAPI): void {
     renderResult: renderTextResult,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("read_image aborted");
+      if (params.file_path.trim().length === 0)
+        throw new Error("file_path must be a non-empty string");
       const input = (ctx.model as { input?: string[] } | undefined)?.input;
       if (!Array.isArray(input) || !input.includes("image"))
         throw new Error("Current model does not support image input");
-      const target = await fencedImagePath(ctx.cwd, params.file_path);
-      const bytes = await readFile(target, signal ? { signal } : undefined);
-      const mimeType = await detectSupportedImageMimeTypeFromFile(target);
-      if (!mimeType) throw new Error(`Unsupported image format for '${params.file_path}'`);
-      const normalized = await resizeImage(bytes, mimeType);
-      const note = normalized ? formatDimensionNote(normalized) : undefined;
+      const extension = extname(params.file_path).toLowerCase();
+      const declaredMimeType = DEEPSEEK_IMAGE_EXTENSIONS[extension];
+      if (declaredMimeType === undefined && extension !== "") {
+        throw new Error(
+          `cannot read "${params.file_path}": the ${extension} extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats`,
+        );
+      }
+      const runtime = getDeepSeekFsRuntime(ctx);
+      let snapshot;
+      try {
+        snapshot = await runtime.readImageSnapshot(
+          params.file_path,
+          DEEPSEEK_IMAGE_MAX_BYTES,
+          signal,
+        );
+      } catch (error) {
+        if (error instanceof SharedSecureFileLimitError) {
+          throw new Error(
+            `cannot read "${params.file_path}": image exceeds the ${DEEPSEEK_IMAGE_MAX_BYTES}-byte source limit; downscale the image and read the smaller copy`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      const target = snapshot.target.displayPath;
+      const bytes = snapshot.bytes;
+      const detectedMimeType = sniffDeepSeekImageMimeType(bytes);
+      if (!detectedMimeType) {
+        throw new Error(
+          `cannot read "${target}": the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF`,
+        );
+      }
+      if (declaredMimeType !== undefined && declaredMimeType !== detectedMimeType) {
+        throw new Error(
+          `cannot read "${target}": the ${extension} extension declares ${declaredMimeType}, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats`,
+        );
+      }
+      const normalized = await resizeImage(bytes, detectedMimeType);
+      if (!normalized) {
+        throw new Error(
+          `cannot read "${target}": the image could not be normalized for model input`,
+        );
+      }
+      assertDeepSeekImageDimensions(target, normalized.originalWidth, normalized.originalHeight);
+      const normalizedBytes = Buffer.from(normalized.data, "base64").byteLength;
+      runtime.recordSuccessfulReadObservation(snapshot.target, snapshot.info);
       return {
         content: [
           {
             type: "text" as const,
-            text: `Image loaded from ${params.file_path}${note ? `\n${note}` : ""}`,
+            text: formatDeepSeekImageReadOutput(target, {
+              mimeType: normalized.mimeType,
+              bytes: normalizedBytes,
+              width: normalized.width,
+              height: normalized.height,
+              originalWidth: normalized.originalWidth,
+              originalHeight: normalized.originalHeight,
+              wasResized: normalized.wasResized,
+            }),
           },
           {
             type: "image" as const,
-            data: normalized?.data ?? bytes.toString("base64"),
-            mimeType: normalized?.mimeType ?? mimeType,
+            data: normalized.data,
+            mimeType: normalized.mimeType,
           },
         ],
         details: undefined,
@@ -235,9 +345,6 @@ function registerDeepSeekWrite(pi: ExtensionAPI): void {
     description: "Create or fully replace a UTF-8 text file.",
     promptSnippet:
       "Use the write tool to create files or completely replace file contents. Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it) and prefer edit for targeted changes.",
-    promptGuidelines: [
-      "Use write to create files or completely replace file contents; read an existing file first before overwriting it, and prefer edit for targeted changes.",
-    ],
     // Internal validation schema is a strict superset of the DeepSeek Harness
     // wire schema. prepareArguments adds Pi-native aliases before *any* tool_call
     // extension runs. before_provider_request strips these aliases from the schema
@@ -288,9 +395,6 @@ function registerDeepSeekEdit(pi: ExtensionAPI): void {
     description: "Edit an existing UTF-8 text file by replacing literal text.",
     promptSnippet:
       "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session.",
-    promptGuidelines: [
-      "Use edit for targeted literal replacements; by default old_string must appear exactly once, and read the file first unless it was just created or edited in this session.",
-    ],
     parameters: Type.Object(
       {
         file_path: Type.String({
