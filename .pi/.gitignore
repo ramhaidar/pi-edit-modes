@@ -1,2 +1,5 @@
 # Pi Image Analyzer temporary clipboard images
 clipboard_temp/
+
+# Local Pi session history
+memories/history/
