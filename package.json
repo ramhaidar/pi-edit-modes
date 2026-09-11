@@ -9,7 +9,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ]
   },
   "peerDependencies": {
@@ -18,16 +18,19 @@
     "typebox": "*"
   },
   "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "pnpm clean && tsc -p tsconfig.build.json",
     "fetch-vendors": "node scripts/fetch-vendors.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "oxlint --deny-warnings src tests",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "format": "node scripts/format.mjs",
+    "format:check": "node scripts/format.mjs --check",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "prepack": "pnpm check"
   },
   "files": [
-    "src",
+    "dist",
     "docs",
     "scripts/fetch-vendors.mjs",
     "README.md",
@@ -45,5 +48,13 @@
     "prettier": "^3.9.6",
     "typebox": "*",
     "typescript": "7.0.2"
-  }
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "packageManager": "pnpm@12.3.4"
 }

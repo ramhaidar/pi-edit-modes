@@ -12,3 +12,5 @@ pnpm-debug.log*
 # Package Zip
 package.ps1
 pi-edit-modes-*.zip
+# Build output
+dist/

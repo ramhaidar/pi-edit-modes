@@ -6,18 +6,20 @@ Contributor-facing commands, test expectations, and packaging notes for `pi-edit
 
 ```bash
 pnpm install
+pnpm format
 pnpm format:check
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm build
 pnpm check
 ```
 
-The repository is pnpm-native. `pnpm-lock.yaml` and `pnpm-workspace.yaml` are authoritative; do not substitute npm, npx, yarn, or bun commands.
+The repository is pnpm-native. `pnpm-lock.yaml` and `pnpm-workspace.yaml` are authoritative; do not substitute npm, npx, yarn, or bun commands. `pnpm format` writes formatting changes; `pnpm format --fix` is accepted as the same operation; `pnpm format:check` only checks.
 
-`pnpm check` runs Prettier format checking, TypeScript typechecking, Oxlint with warnings denied across `src` and `tests`, and the full Node test suite. GitHub Actions runs the same gates after a frozen install on Node 22 and Node 24.
+`pnpm check` runs Prettier format checking, TypeScript typechecking, Oxlint with warnings denied across `src` and `tests`, the full Node test suite, and a clean TypeScript build. GitHub Actions runs the same gates after a frozen install on Node 22 and Node 24.
 
-There is no build step. The package ships TypeScript source directly.
+`pnpm build` emits ESM JavaScript from `src/` into `dist/`. Relative `.ts` imports remain convenient for the source/test runner and are rewritten to `.js` in emitted files by TypeScript. The published Pi extension entry point is `dist/index.js`.
 
 ## Test coverage
 
@@ -49,7 +51,7 @@ Use `--force` to re-download even when the recorded SHA matches. `vendor/.state.
 
 Before publishing or handing off a change, run `pnpm check`, `pnpm pack --dry-run`, and `git diff --check`.
 
-The published package includes `src/`, `docs/`, `README.md`, and `LICENSE`.
+The published package includes `dist/`, `docs/`, `scripts/fetch-vendors.mjs`, `README.md`, and `LICENSE`. TypeScript source and tests stay in the repository but are not required at runtime.
 
 ## Documentation ownership
 

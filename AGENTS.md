@@ -18,7 +18,7 @@ Use **pnpm exclusively** in this repository. Never use `npm`, `npx`, `yarn`, or 
 - `gemini`: Gemini CLI-shaped `replace` and `write_file`
 - `deepseek`: Harness-compatible `standard` preset (`read`/`write`/`edit`, conditional `read_image`) or `minimal` preset (`str_replace_editor`)
 
-Entry point: `src/index.ts`, registered via `package.json` → `pi.extensions`. The package ships `src/`, `docs/`, `scripts/fetch-vendors.mjs`, `README.md`, and `LICENSE` directly — there is no build step.
+Source entry point: `src/index.ts`. `pnpm build` emits the runtime package to `dist/`, and `package.json` → `pi.extensions` registers `dist/index.js`. The published package ships `dist/`, `docs/`, `scripts/fetch-vendors.mjs`, `README.md`, and `LICENSE`.
 
 Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) are peer dependencies. Direct dependencies are `ignore` (Gemini discovery filtering) and `koffi` (Win32 APIs used by the secure filesystem backend).
 
@@ -30,15 +30,16 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 | Run all quality gates | `pnpm check`                                                                                         |
 | Typecheck             | `pnpm typecheck`                                                                                     |
 | Lint                  | `pnpm lint`                                                                                          |
-| Format code           | `pnpm format`                                                                                        |
+| Format code           | `pnpm format` or `pnpm format --fix`                                                                 |
 | Check formatting      | `pnpm format:check`                                                                                  |
 | Run all tests         | `pnpm test`                                                                                          |
+| Build JS package      | `pnpm build`                                                                                         |
 | Run one test file     | `pnpm test -- tests/router.test.ts` or `node --experimental-strip-types --test tests/router.test.ts` |
 | Fetch vendor repos    | `pnpm fetch-vendors` (add `--force` to re-download)                                                  |
 
-- There is no build step; the package ships TypeScript source directly. `pnpm typecheck`, `pnpm lint`, and CI are quality gates rather than build outputs.
-- `pnpm check` runs format check, typecheck, lint, and tests in that order.
-- GitHub Actions runs frozen install, format check, typecheck, lint, and tests on Node 22 and Node 24.
+- `pnpm build` emits ESM JavaScript into `dist/`; TypeScript rewrites source-relative `.ts` import specifiers to `.js` in the emitted package.
+- `pnpm check` runs format check, typecheck, lint, tests, and a clean build in that order.
+- GitHub Actions runs a frozen install and `pnpm check` on Node 22 and Node 24.
 - Tests run on Node's built-in runner with `--experimental-strip-types` (see `package.json` `scripts.test`).
 - `tsconfig.json` includes both `src/` and `tests/`; test files must typecheck too (`@types/node` is a devDependency for `node:test`/`node:assert`).
 - Prettier (`.prettierrc.json` + `.prettierignore`) is the formatter. `src/tools/codex/engine.ts`, `vendor/`, and `pnpm-lock.yaml` are excluded from formatting (see Code Style / Safety).
@@ -75,5 +76,5 @@ Runtime Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 ## Agent Workflow
 
 - Make minimal, behavior-preserving changes; this repo favors upstream model-facing and runtime-flow parity over convenience, while documenting host capabilities that cannot be reproduced exactly.
-- Before finishing, run `pnpm check` and keep format, typecheck, lint, and tests green. Any new tool behavior gets a matching test file under `tests/`.
+- Before finishing, run `pnpm check` and keep format, typecheck, lint, tests, and the emitted build green. Any new tool behavior gets a matching test file under `tests/`.
 - Settings persistence changes must preserve the migration path from the legacy `codex.surface` shape (see `tests/settings.test.ts`).

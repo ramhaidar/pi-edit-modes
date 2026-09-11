@@ -51,10 +51,15 @@ See [Codex mode](docs/CODEX.md) for the focused contract.
 
 ```bash
 pnpm install
+pnpm format:check
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
 pnpm check
 ```
 
-`pnpm check` runs formatting checks, TypeScript typechecking, Oxlint with warnings denied, and the full Node test suite. CI runs the same gates on Node 22 and Node 24.
+`pnpm build` emits the runnable ESM JavaScript package to `dist/`. `pnpm format --fix` is accepted as an alias of `pnpm format`, while `pnpm format:check` is non-mutating. `pnpm check` runs formatting checks, TypeScript typechecking, Oxlint with warnings denied, the full Node test suite, and a clean build. CI runs the same gates on Node 22 and Node 24.
 
 See [Development and quality gates](docs/DEVELOPMENT.md) for complete test coverage, platform skips, vendor snapshots, packaging checks, and contributor rules.
 
