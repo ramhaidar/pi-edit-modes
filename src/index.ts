@@ -17,6 +17,7 @@ import {
   guardCodexProviderPayload,
 } from "./tools/codex/engine.ts";
 import { registerGeminiTools } from "./tools/gemini/index.ts";
+import { createEditModesHookHost } from "./hooks.ts";
 import { clearGeminiPreparedMutations, handleGeminiToolCall } from "./tools/gemini/lifecycle.ts";
 import { registerDeepSeekTool } from "./tools/deepseek/index.ts";
 import {
@@ -114,16 +115,6 @@ function effectiveSessionOverride(
   return cliMode !== "auto" ? cliMode : runtimeMode;
 }
 
-function effectiveSurface(
-  cliSurface: SessionToolSurface,
-  runtimeSurface: SessionToolSurface,
-  configured: ToolSurface,
-): ToolSurface {
-  if (cliSurface !== "auto") return cliSurface;
-  if (runtimeSurface !== "auto") return runtimeSurface;
-  return configured;
-}
-
 function surfaceLabel(surface: ManagedSurface): string {
   switch (surface) {
     case "pi":
@@ -150,6 +141,7 @@ function surfaceLabel(surface: ManagedSurface): string {
 }
 
 export default function editModesExtension(pi: ExtensionAPI): void {
+  const hooks = createEditModesHookHost(pi);
   pi.registerFlag("tool-mode", {
     description: "File tool mode: auto, gemini, codex, deepseek, or pi",
     type: "string",
@@ -191,7 +183,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   let currentSurface: ManagedSurface = "pi";
   let currentSurfaceReason: string | undefined;
   const shownWarnings = new Set<string>();
-  let filesystemToolFlavor: FilesystemToolFlavor = "pi";
+  let filesystemToolFlavor: FilesystemToolFlavor | undefined;
 
   // Pi treats tool_call input as mutable and other extensions commonly special-case
   // the built-in names write/edit using Pi-native argument fields. Keep the DeepSeek
@@ -214,31 +206,55 @@ export default function editModesExtension(pi: ExtensionAPI): void {
 
   const setFilesystemToolFlavor = (next: FilesystemToolFlavor, cwd: string): boolean => {
     if (filesystemToolFlavor === next) return false;
-    if (next === "deepseek") registerDeepSeekFilesystemTools(pi);
-    else registerPiFilesystemTools(pi, cwd);
+    if (next === "deepseek") registerDeepSeekFilesystemTools(pi, hooks);
+    else registerPiFilesystemTools(pi, cwd, hooks);
     filesystemToolFlavor = next;
     return true;
   };
 
   const syncTools = async (model: unknown, ctx?: any, forceRefresh = false): Promise<boolean> => {
+    const previousResolution = currentResolution;
+    const previousSurface = currentSurface;
+    const previousActiveTools = pi.getActiveTools();
     const snapshot = await store.refresh(forceRefresh);
     for (const message of snapshot.warnings) warn(ctx, message);
-    const resolution = resolveMode({
+
+    const beforeResolve = await hooks.beforeModeResolve({
+      model: modelIdentity(model),
+      settings: snapshot.settings,
+      sessionMode: effectiveSessionOverride(cliSessionMode, runtimeSessionMode),
+      sessionSurface: cliSessionSurface !== "auto" ? cliSessionSurface : runtimeSessionSurface,
+    });
+
+    let resolution = resolveMode({
       model: modelIdentity(model),
       settings: snapshot.settings,
       overrides: snapshot.overrides,
-      sessionOverride: effectiveSessionOverride(cliSessionMode, runtimeSessionMode),
+      sessionOverride: beforeResolve.sessionMode,
     });
+    let surface =
+      beforeResolve.sessionSurface === "auto"
+        ? snapshot.settings.surface
+        : beforeResolve.sessionSurface;
+
+    const afterResolve = await hooks.afterModeResolve({
+      model: modelIdentity(model),
+      settings: snapshot.settings,
+      resolution,
+      surface,
+    });
+    resolution = afterResolve.resolution;
+    surface = afterResolve.surface;
+    if (!isToolMode(resolution.mode))
+      throw new Error(`pi-edit-modes hook returned invalid mode '${String(resolution.mode)}'`);
+    if (!isToolSurface(surface))
+      throw new Error(`pi-edit-modes hook returned invalid surface '${String(surface)}'`);
+
     currentResolution = resolution;
     const deepseekPreset: DeepSeekPreset = snapshot.settings.deepseek.preset;
-    const definitionsChanged = setFilesystemToolFlavor(
+    let definitionsChanged = setFilesystemToolFlavor(
       resolution.mode === "deepseek" && deepseekPreset === "standard" ? "deepseek" : "pi",
       ctx?.cwd ?? process.cwd(),
-    );
-    const surface = effectiveSurface(
-      cliSessionSurface,
-      runtimeSessionSurface,
-      snapshot.settings.surface,
     );
     const available = configuredToolNames(pi);
     const codexSupport = getCodexApplyPatchSupport(model, available.has("apply_patch"));
@@ -335,16 +351,34 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     // If DeepSeek's requested surface could not be activated, restore Pi's own
     // read/write/edit definitions so the reported fallback is semantically true.
     if (currentSurface === "deepseek-unavailable" && filesystemToolFlavor === "deepseek") {
-      setFilesystemToolFlavor("pi", ctx?.cwd ?? process.cwd());
-      return true;
+      definitionsChanged =
+        setFilesystemToolFlavor("pi", ctx?.cwd ?? process.cwd()) || definitionsChanged;
+    }
+
+    const nextActiveTools = pi.getActiveTools();
+    if (!sameToolList(previousActiveTools, nextActiveTools)) {
+      await hooks.notifyToolsChanged({ previous: previousActiveTools, current: nextActiveTools });
+    }
+    if (
+      previousResolution.mode !== currentResolution.mode ||
+      previousResolution.source !== currentResolution.source ||
+      previousResolution.matchedBy !== currentResolution.matchedBy ||
+      previousSurface !== currentSurface
+    ) {
+      await hooks.notifyModeChanged({
+        previousResolution,
+        resolution: currentResolution,
+        previousSurface,
+        surface: currentSurface,
+      });
     }
     return definitionsChanged;
   };
 
-  registerCodexApplyPatchTool(pi);
-  registerDeepSeekTool(pi);
-  registerDeepSeekReadImageTool(pi);
-  registerGeminiTools(pi);
+  registerCodexApplyPatchTool(pi, hooks);
+  registerDeepSeekTool(pi, hooks);
+  registerDeepSeekReadImageTool(pi, hooks);
+  registerGeminiTools(pi, hooks);
 
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (currentResolution.mode !== "gemini") return;
@@ -543,7 +577,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", (_event, ctx) => {
     clearGeminiPreparedMutations(ctx);
     if (filesystemToolFlavor === "deepseek") {
-      registerPiFilesystemTools(pi, process.cwd());
+      registerPiFilesystemTools(pi, process.cwd(), hooks);
       filesystemToolFlavor = "pi";
     }
     clearDeepSeekFsRuntimes();

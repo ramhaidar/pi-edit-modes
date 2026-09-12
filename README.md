@@ -70,4 +70,11 @@ See [Development and quality gates](docs/DEVELOPMENT.md) for complete test cover
 - [Codex mode](docs/CODEX.md) - `apply_patch`, Environment ID behavior, host-scope boundaries.
 - [DeepSeek mode](docs/DEEPSEEK.md) - standard/minimal tools, scheduling, observations, image and shell behavior.
 - [Tool flows and parity](docs/TOOL-FLOWS.md) - shared surfaces, provider guards, host divergences, diff rendering.
+- [Hooks and extension API](docs/HOOKS.md) - middleware, tool decorators, mode hooks, lifecycle notifications, discovery.
 - [Development and quality gates](docs/DEVELOPMENT.md) - tests, CI, vendor snapshots, packaging, contributor workflow.
+
+## Extension hooks
+
+`pi-edit-modes` exposes an optional, provider-neutral hook host over `pi.events`. Other extensions can register priority-ordered tool middleware, decorate managed tool definitions, override mode-resolution inputs/results, and observe mode/tool transitions. No hook provider or consumer is required: with no plugins registered, standalone behavior is unchanged.
+
+The public hook types are exported from `pi-edit-modes/hooks`. See [Hooks and extension API](docs/HOOKS.md).

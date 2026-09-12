@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { formatDeepSeekFileView } from "./engine.ts";
 import { getDeepSeekFsRuntime } from "./runtime.ts";
+import { registerManagedTool, type EditModesHookHost } from "../../hooks.ts";
 import {
   DiffCallRenderComponent,
   displayToolPath,
@@ -154,159 +155,171 @@ function renderResult(result: any, options: any, theme: any, context?: any) {
   );
 }
 
-export function registerDeepSeekTool(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: DEEPSEEK_TOOL_NAME,
-    label: DEEPSEEK_TOOL_NAME,
-    description: DEFAULT_DESCRIPTION,
-    parameters: Type.Object(
-      {
-        command: Type.Union(
-          [
-            Type.Literal("view"),
-            Type.Literal("create"),
-            Type.Literal("str_replace"),
-            Type.Literal("insert"),
-          ],
-          {
-            description:
-              "The commands to run. Allowed options are: `view`, `create`, `str_replace`, `insert`.",
-          },
-        ),
-        path: Type.String({
-          description: "Absolute path to file or directory, e.g. `/repo/file.py` or `/repo`.",
-        }),
-        file_text: Type.Optional(
-          Type.Union([Type.String(), Type.Null()], {
-            description:
-              "Required string parameter of `create` command, with the content of the file to be created. A null placeholder is treated as omitted by commands that do not use this parameter.",
-          }),
-        ),
-        insert_line: Type.Optional(
-          Type.Union([Type.Integer(), Type.Null()], {
-            description:
-              "Required integer parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`. A null placeholder is treated as omitted by commands that do not use this parameter.",
-          }),
-        ),
-        new_str: Type.Optional(
-          Type.Union([Type.String(), Type.Null()], {
-            description:
-              "Optional string parameter of `str_replace` command containing the new string (if omitted, no string will be added). Required string parameter of `insert` command containing the string to insert. A null placeholder is accepted only by commands that do not use this parameter.",
-          }),
-        ),
-        old_str: Type.Optional(
-          Type.Union([Type.String(), Type.Null()], {
-            description:
-              "Required string parameter of `str_replace` command containing the string in `path` to replace. A null placeholder is treated as omitted by commands that do not use this parameter.",
-          }),
-        ),
-        view_range: Type.Optional(
-          Type.Union([Type.Array(Type.Integer()), Type.Null()], {
-            description:
-              "Optional parameter of `view` command when `path` points to a file. If omitted or null, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file.",
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
-    renderCall(args, theme, context) {
-      const state = context.state as DiffCallRendererState;
-      const component =
-        context.lastComponent instanceof DiffCallRenderComponent
-          ? context.lastComponent
-          : (state.callComponent ?? new DiffCallRenderComponent());
-      state.callComponent = component;
-      updateDeepSeekHeader(component, theme, deepSeekAction(args.command), args.path);
-      return component;
+export function registerDeepSeekTool(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: DEEPSEEK_TOOL_NAME,
+      provider: "deepseek",
+      capabilities: ["filesystem:read", "filesystem:write"],
+      tags: ["editor", "mixed-read-write"],
     },
-    renderResult,
-    executionMode: "sequential",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const runtime = getDeepSeekFsRuntime(ctx);
+    {
+      name: DEEPSEEK_TOOL_NAME,
+      label: DEEPSEEK_TOOL_NAME,
+      description: DEFAULT_DESCRIPTION,
+      parameters: Type.Object(
+        {
+          command: Type.Union(
+            [
+              Type.Literal("view"),
+              Type.Literal("create"),
+              Type.Literal("str_replace"),
+              Type.Literal("insert"),
+            ],
+            {
+              description:
+                "The commands to run. Allowed options are: `view`, `create`, `str_replace`, `insert`.",
+            },
+          ),
+          path: Type.String({
+            description: "Absolute path to file or directory, e.g. `/repo/file.py` or `/repo`.",
+          }),
+          file_text: Type.Optional(
+            Type.Union([Type.String(), Type.Null()], {
+              description:
+                "Required string parameter of `create` command, with the content of the file to be created. A null placeholder is treated as omitted by commands that do not use this parameter.",
+            }),
+          ),
+          insert_line: Type.Optional(
+            Type.Union([Type.Integer(), Type.Null()], {
+              description:
+                "Required integer parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`. A null placeholder is treated as omitted by commands that do not use this parameter.",
+            }),
+          ),
+          new_str: Type.Optional(
+            Type.Union([Type.String(), Type.Null()], {
+              description:
+                "Optional string parameter of `str_replace` command containing the new string (if omitted, no string will be added). Required string parameter of `insert` command containing the string to insert. A null placeholder is accepted only by commands that do not use this parameter.",
+            }),
+          ),
+          old_str: Type.Optional(
+            Type.Union([Type.String(), Type.Null()], {
+              description:
+                "Required string parameter of `str_replace` command containing the string in `path` to replace. A null placeholder is treated as omitted by commands that do not use this parameter.",
+            }),
+          ),
+          view_range: Type.Optional(
+            Type.Union([Type.Array(Type.Integer()), Type.Null()], {
+              description:
+                "Optional parameter of `view` command when `path` points to a file. If omitted or null, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      renderCall(args, theme, context) {
+        const state = context.state as DiffCallRendererState;
+        const component =
+          context.lastComponent instanceof DiffCallRenderComponent
+            ? context.lastComponent
+            : (state.callComponent ?? new DiffCallRenderComponent());
+        state.callComponent = component;
+        updateDeepSeekHeader(component, theme, deepSeekAction(args.command), args.path);
+        return component;
+      },
+      renderResult,
+      executionMode: "sequential",
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const runtime = getDeepSeekFsRuntime(ctx);
 
-      if (params.command === "view") {
-        const targetPath = requireAbsolute(params.path);
-        const viewed = await runtime.editorView(targetPath, signal);
-        if (viewed.info.type === "directory") {
-          if (params.view_range !== undefined && params.view_range !== null) {
-            throw new Error(
-              "The `view_range` parameter is not allowed when `path` points to a directory.",
-            );
+        if (params.command === "view") {
+          const targetPath = requireAbsolute(params.path);
+          const viewed = await runtime.editorView(targetPath, signal);
+          if (viewed.info.type === "directory") {
+            if (params.view_range !== undefined && params.view_range !== null) {
+              throw new Error(
+                "The `view_range` parameter is not allowed when `path` points to a directory.",
+              );
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: await directoryListing(
+                    runtime,
+                    viewed.target.displayPath,
+                    viewed.target.targetKey,
+                    signal,
+                  ),
+                },
+              ],
+              details: undefined,
+            };
           }
           return {
             content: [
               {
                 type: "text",
-                text: await directoryListing(
-                  runtime,
-                  viewed.target.displayPath,
-                  viewed.target.targetKey,
-                  signal,
+                text: truncate(
+                  formatDeepSeekFileView(
+                    viewed.target.displayPath,
+                    viewed.content ?? "",
+                    params.view_range ?? undefined,
+                  ),
                 ),
               },
             ],
             details: undefined,
           };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: truncate(
-                formatDeepSeekFileView(
-                  viewed.target.displayPath,
-                  viewed.content ?? "",
-                  params.view_range ?? undefined,
-                ),
-              ),
-            },
-          ],
-          details: undefined,
-        };
-      }
 
-      if (params.command === "create") {
-        const content = requiredForCommand(params.file_text ?? undefined, "file_text", "create");
-        const targetPath = requireAbsolute(params.path);
-        const outcome = await runtime.editorCreate(targetPath, content, signal);
-        return {
-          content: [{ type: "text", text: `New file created successfully at: ${outcome.path}` }],
-          details: details(outcome.path, outcome.before, outcome.after, "A"),
-        };
-      }
+        if (params.command === "create") {
+          const content = requiredForCommand(params.file_text ?? undefined, "file_text", "create");
+          const targetPath = requireAbsolute(params.path);
+          const outcome = await runtime.editorCreate(targetPath, content, signal);
+          return {
+            content: [{ type: "text", text: `New file created successfully at: ${outcome.path}` }],
+            details: details(outcome.path, outcome.before, outcome.after, "A"),
+          };
+        }
 
-      if (params.command === "str_replace") {
-        if (params.new_str === null)
-          throw new Error(
-            "Parameter `new_str` must be omitted or contain a string for command: str_replace",
+        if (params.command === "str_replace") {
+          if (params.new_str === null)
+            throw new Error(
+              "Parameter `new_str` must be omitted or contain a string for command: str_replace",
+            );
+          const targetPath = requireAbsolute(params.path);
+          const outcome = await runtime.editorReplace(
+            targetPath,
+            params.old_str ?? undefined,
+            params.new_str ?? undefined,
+            signal,
+            { requireObservation: false },
           );
+          return {
+            content: [
+              { type: "text", text: `The file ${outcome.path} has been edited successfully.` },
+            ],
+            details: details(outcome.path, outcome.before, outcome.after, "M"),
+          };
+        }
+
+        if (params.insert_line === undefined || params.insert_line === null)
+          throw new Error("Parameter `insert_line` is required for command: insert");
+        const value = requiredForCommand(params.new_str ?? undefined, "new_str", "insert");
         const targetPath = requireAbsolute(params.path);
-        const outcome = await runtime.editorReplace(
-          targetPath,
-          params.old_str ?? undefined,
-          params.new_str ?? undefined,
-          signal,
-          { requireObservation: false },
-        );
+        const outcome = await runtime.editorInsert(targetPath, params.insert_line, value, signal, {
+          requireObservation: false,
+        });
         return {
           content: [
             { type: "text", text: `The file ${outcome.path} has been edited successfully.` },
           ],
           details: details(outcome.path, outcome.before, outcome.after, "M"),
         };
-      }
-
-      if (params.insert_line === undefined || params.insert_line === null)
-        throw new Error("Parameter `insert_line` is required for command: insert");
-      const value = requiredForCommand(params.new_str ?? undefined, "new_str", "insert");
-      const targetPath = requireAbsolute(params.path);
-      const outcome = await runtime.editorInsert(targetPath, params.insert_line, value, signal, {
-        requireObservation: false,
-      });
-      return {
-        content: [{ type: "text", text: `The file ${outcome.path} has been edited successfully.` }],
-        details: details(outcome.path, outcome.before, outcome.after, "M"),
-      };
+      },
     },
-  });
+  );
 }

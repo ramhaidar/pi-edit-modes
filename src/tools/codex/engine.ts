@@ -20,6 +20,7 @@ import {
 import { Container, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { compactFileHeader, displayToolPath, scanApplyPatchPreviewTargets } from "../diff-call-renderer.ts";
+import { registerManagedTool, type EditModesHookHost } from "../../hooks.ts";
 
 // Compatibility baseline: OpenAI Codex main @ 6525b95dae2082ac9fee672b14c2cffdef172bb8 (2026-08-26).
 // Pi is only the transport/lifecycle/rendering/security adapter around Codex semantics.
@@ -2781,9 +2782,17 @@ function effectiveFileToolSurface(activeTools: string[]): string {
 
 export type CodexApplyPatchSupport = ApplyPatchSupport;
 
-export function registerCodexApplyPatchTool(pi: ExtensionAPI): void {
+export function registerCodexApplyPatchTool(
+	pi: ExtensionAPI,
+	hooks?: EditModesHookHost,
+): void {
 	const pendingFailureDetails = new Map<string, ApplyPatchDetails>();
-	pi.registerTool({
+	registerManagedTool(pi, hooks, {
+		name: "apply_patch",
+		provider: "codex",
+		capabilities: ["filesystem:read", "filesystem:write"],
+		tags: ["patch", "mutation"],
+	}, {
 		name: "apply_patch",
 		label: "apply_patch",
 		description: APPLY_PATCH_DESCRIPTION,
@@ -2927,7 +2936,7 @@ export function registerCodexApplyPatchTool(pi: ExtensionAPI): void {
 				} finally {
 					await fsContext.close();
 				}
-			});
+				});
 		},
 
 		renderCall(args, _theme, context) {

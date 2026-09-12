@@ -10,6 +10,7 @@ import { extname } from "node:path";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { SharedSecureFileLimitError } from "../codex/engine.ts";
+import { registerManagedTool, type EditModesHookHost } from "../../hooks.ts";
 import {
   DEEPSEEK_READ_LIMIT,
   formatDeepSeekEditOutput,
@@ -124,42 +125,52 @@ function renderMutationResult(
   return new Text(theme.fg(isError ? "error" : "success", text), 0, 0);
 }
 
-function registerDeepSeekRead(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "read",
-    label: "read",
-    description: "Read a UTF-8 text file and return line-numbered content.",
-    promptSnippet:
-      "Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.",
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description: "Path to read, resolved by the filesystem backend.",
-        }),
-        offset: Type.Optional(
-          Type.Number({ description: "1-based first line to return. Defaults to 1." }),
-        ),
-        limit: Type.Optional(
-          Type.Number({
-            description: `Maximum number of lines to return. Defaults to ${DEEPSEEK_READ_LIMIT}.`,
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
-    executionMode: "parallel",
-    renderCall: (args, theme) => renderCallTitle("read", renderPath(args), theme),
-    renderResult: renderTextResult,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const outcome = await getDeepSeekFsRuntime(ctx).read(
-        params.file_path,
-        params.offset,
-        params.limit,
-        signal,
-      );
-      return resultText(formatDeepSeekReadOutput(outcome), { target: outcome.path, action: "V" });
+function registerDeepSeekRead(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "read",
+      provider: "deepseek",
+      capabilities: ["filesystem:read"],
+      tags: ["read"],
     },
-  });
+    {
+      name: "read",
+      label: "read",
+      description: "Read a UTF-8 text file and return line-numbered content.",
+      promptSnippet:
+        "Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.",
+      parameters: Type.Object(
+        {
+          file_path: Type.String({
+            description: "Path to read, resolved by the filesystem backend.",
+          }),
+          offset: Type.Optional(
+            Type.Number({ description: "1-based first line to return. Defaults to 1." }),
+          ),
+          limit: Type.Optional(
+            Type.Number({
+              description: `Maximum number of lines to return. Defaults to ${DEEPSEEK_READ_LIMIT}.`,
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      executionMode: "parallel",
+      renderCall: (args, theme) => renderCallTitle("read", renderPath(args), theme),
+      renderResult: renderTextResult,
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const outcome = await getDeepSeekFsRuntime(ctx).read(
+          params.file_path,
+          params.offset,
+          params.limit,
+          signal,
+        );
+        return resultText(formatDeepSeekReadOutput(outcome), { target: outcome.path, action: "V" });
+      },
+    },
+  );
 }
 
 type DeepSeekImageMimeType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
@@ -239,230 +250,260 @@ export function assertDeepSeekImageDimensions(
   }
 }
 
-export function registerDeepSeekReadImageTool(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "read_image",
-    label: "read_image",
-    description:
-      "Read a PNG/JPEG/WebP/GIF file and return the image itself. " +
-      "A path without a file extension is accepted; the format is detected from the file content, so normalized attachment paths can be passed directly without copying or renaming. " +
-      "Harness validates and downscales large supported images before the next model request, so use this tool directly instead of installing image libraries or creating thumbnails merely to inspect an image. " +
-      "Independent files may be read concurrently in small batches. Requires the current model to accept image input.",
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description: "Path to the image file, resolved by the filesystem backend.",
-        }),
-      },
-      { additionalProperties: false },
-    ),
-    executionMode: "parallel",
-    renderCall: (args, theme) => renderCallTitle("read_image", renderPath(args), theme),
-    renderResult: renderTextResult,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (signal?.aborted) throw new Error("read_image aborted");
-      if (params.file_path.trim().length === 0)
-        throw new Error("file_path must be a non-empty string");
-      const input = (ctx.model as { input?: string[] } | undefined)?.input;
-      if (!Array.isArray(input) || !input.includes("image"))
-        throw new Error("Current model does not support image input");
-      const extension = extname(params.file_path).toLowerCase();
-      const declaredMimeType = DEEPSEEK_IMAGE_EXTENSIONS[extension];
-      if (declaredMimeType === undefined && extension !== "") {
-        throw new Error(
-          `cannot read "${params.file_path}": the ${extension} extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats`,
-        );
-      }
-      const runtime = getDeepSeekFsRuntime(ctx);
-      let snapshot;
-      try {
-        snapshot = await runtime.readImageSnapshot(
-          params.file_path,
-          DEEPSEEK_IMAGE_MAX_BYTES,
-          signal,
-        );
-      } catch (error) {
-        if (error instanceof SharedSecureFileLimitError) {
+export function registerDeepSeekReadImageTool(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "read_image",
+      provider: "deepseek",
+      capabilities: ["filesystem:read", "filesystem:image-read"],
+      tags: ["read", "image"],
+    },
+    {
+      name: "read_image",
+      label: "read_image",
+      description:
+        "Read a PNG/JPEG/WebP/GIF file and return the image itself. " +
+        "A path without a file extension is accepted; the format is detected from the file content, so normalized attachment paths can be passed directly without copying or renaming. " +
+        "Harness validates and downscales large supported images before the next model request, so use this tool directly instead of installing image libraries or creating thumbnails merely to inspect an image. " +
+        "Independent files may be read concurrently in small batches. Requires the current model to accept image input.",
+      parameters: Type.Object(
+        {
+          file_path: Type.String({
+            description: "Path to the image file, resolved by the filesystem backend.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+      executionMode: "parallel",
+      renderCall: (args, theme) => renderCallTitle("read_image", renderPath(args), theme),
+      renderResult: renderTextResult,
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        if (signal?.aborted) throw new Error("read_image aborted");
+        if (params.file_path.trim().length === 0)
+          throw new Error("file_path must be a non-empty string");
+        const input = (ctx.model as { input?: string[] } | undefined)?.input;
+        if (!Array.isArray(input) || !input.includes("image"))
+          throw new Error("Current model does not support image input");
+        const extension = extname(params.file_path).toLowerCase();
+        const declaredMimeType = DEEPSEEK_IMAGE_EXTENSIONS[extension];
+        if (declaredMimeType === undefined && extension !== "") {
           throw new Error(
-            `cannot read "${params.file_path}": image exceeds the ${DEEPSEEK_IMAGE_MAX_BYTES}-byte source limit; downscale the image and read the smaller copy`,
-            { cause: error },
+            `cannot read "${params.file_path}": the ${extension} extension does not declare a supported image format; read_image accepts PNG/JPEG/WebP/GIF files, including extension-less files in those formats`,
           );
         }
-        throw error;
-      }
-      const target = snapshot.target.displayPath;
-      const bytes = snapshot.bytes;
-      const detectedMimeType = sniffDeepSeekImageMimeType(bytes);
-      if (!detectedMimeType) {
-        throw new Error(
-          `cannot read "${target}": the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF`,
-        );
-      }
-      if (declaredMimeType !== undefined && declaredMimeType !== detectedMimeType) {
-        throw new Error(
-          `cannot read "${target}": the ${extension} extension declares ${declaredMimeType}, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats`,
-        );
-      }
-      const normalized = await resizeImage(bytes, detectedMimeType);
-      if (!normalized) {
-        throw new Error(
-          `cannot read "${target}": the image could not be normalized for model input`,
-        );
-      }
-      assertDeepSeekImageDimensions(target, normalized.originalWidth, normalized.originalHeight);
-      const normalizedBytes = Buffer.from(normalized.data, "base64").byteLength;
-      runtime.recordSuccessfulReadObservation(snapshot.target, snapshot.info);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: formatDeepSeekImageReadOutput(target, {
+        const runtime = getDeepSeekFsRuntime(ctx);
+        let snapshot;
+        try {
+          snapshot = await runtime.readImageSnapshot(
+            params.file_path,
+            DEEPSEEK_IMAGE_MAX_BYTES,
+            signal,
+          );
+        } catch (error) {
+          if (error instanceof SharedSecureFileLimitError) {
+            throw new Error(
+              `cannot read "${params.file_path}": image exceeds the ${DEEPSEEK_IMAGE_MAX_BYTES}-byte source limit; downscale the image and read the smaller copy`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        const target = snapshot.target.displayPath;
+        const bytes = snapshot.bytes;
+        const detectedMimeType = sniffDeepSeekImageMimeType(bytes);
+        if (!detectedMimeType) {
+          throw new Error(
+            `cannot read "${target}": the file content is not a supported image format; read_image accepts PNG/JPEG/WebP/GIF`,
+          );
+        }
+        if (declaredMimeType !== undefined && declaredMimeType !== detectedMimeType) {
+          throw new Error(
+            `cannot read "${target}": the ${extension} extension declares ${declaredMimeType}, but the bytes use a different image format; rename the file to match its actual format if it is PNG/JPEG/WebP/GIF, or convert it to one of those formats`,
+          );
+        }
+        const normalized = await resizeImage(bytes, detectedMimeType);
+        if (!normalized) {
+          throw new Error(
+            `cannot read "${target}": the image could not be normalized for model input`,
+          );
+        }
+        assertDeepSeekImageDimensions(target, normalized.originalWidth, normalized.originalHeight);
+        const normalizedBytes = Buffer.from(normalized.data, "base64").byteLength;
+        runtime.recordSuccessfulReadObservation(snapshot.target, snapshot.info);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatDeepSeekImageReadOutput(target, {
+                mimeType: normalized.mimeType,
+                bytes: normalizedBytes,
+                width: normalized.width,
+                height: normalized.height,
+                originalWidth: normalized.originalWidth,
+                originalHeight: normalized.originalHeight,
+                wasResized: normalized.wasResized,
+              }),
+            },
+            {
+              type: "image" as const,
+              data: normalized.data,
               mimeType: normalized.mimeType,
-              bytes: normalizedBytes,
-              width: normalized.width,
-              height: normalized.height,
-              originalWidth: normalized.originalWidth,
-              originalHeight: normalized.originalHeight,
-              wasResized: normalized.wasResized,
-            }),
-          },
-          {
-            type: "image" as const,
-            data: normalized.data,
-            mimeType: normalized.mimeType,
-          },
-        ],
-        details: undefined,
-      };
-    },
-  });
-}
-
-function registerDeepSeekWrite(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "write",
-    label: "write",
-    description: "Create or fully replace a UTF-8 text file.",
-    promptSnippet:
-      "Use the write tool to create files or completely replace file contents. Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it) and prefer edit for targeted changes.",
-    // Internal validation schema is a strict superset of the DeepSeek Harness
-    // wire schema. prepareArguments adds Pi-native aliases before *any* tool_call
-    // extension runs. before_provider_request strips these aliases from the schema
-    // advertised to the model, so model-facing parameters stay Harness-exact.
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description: "Path to write, resolved by the filesystem backend.",
-        }),
-        content: Type.String({ description: "Full UTF-8 text content to write." }),
-        path: Type.Optional(Type.String()),
+            },
+          ],
+          details: undefined,
+        };
       },
-      { additionalProperties: false },
-    ),
-    prepareArguments: prepareDeepSeekWriteArgsForPi,
-    executionMode: "sequential",
-    // Explicitly override Pi built-in renderer inheritance. Because the tool name
-    // is `write`, Pi may inherit built-in presentation defaults unless this is set.
-    // DeepSeek file mutations should use the same boxed shell as str_replace_editor.
-    renderShell: "default",
-    renderCall: (args, theme, context) => renderMutationCall("write", "M", args, theme, context),
-    renderResult: (result, options, theme, context) =>
-      renderMutationResult("write", result, options, theme, context),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const normalized = normalizeDeepSeekWriteArgs(params as any);
-      const outcome = await getDeepSeekFsRuntime(ctx).write(
-        normalized.filePath,
-        normalized.content,
-        signal,
-      );
-      const diff =
-        outcome.before === null
-          ? generateDiffString("", outcome.after).diff
-          : generateDiffString(outcome.before, outcome.after).diff;
-      return resultText(formatDeepSeekWriteOutput(outcome.path, outcome.operation), {
-        target: outcome.path,
-        action: outcome.operation === "create" ? "A" : "M",
-        diff,
-      });
     },
-  });
+  );
 }
 
-function registerDeepSeekEdit(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "edit",
-    label: "edit",
-    description: "Edit an existing UTF-8 text file by replacing literal text.",
-    promptSnippet:
-      "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session.",
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description: "Path to edit, resolved by the filesystem backend.",
-        }),
-        old_string: Type.String({ description: "Literal text to replace. Must match exactly." }),
-        new_string: Type.String({
-          description: "Literal replacement text. Use an empty string to delete the match.",
-        }),
-        replace_all: Type.Optional(
-          Type.Boolean({
-            description:
-              "Replace all matches. Defaults to false; when false, old_string must appear exactly once.",
+function registerDeepSeekWrite(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "write",
+      provider: "deepseek",
+      capabilities: ["filesystem:write"],
+      tags: ["mutation", "write"],
+    },
+    {
+      name: "write",
+      label: "write",
+      description: "Create or fully replace a UTF-8 text file.",
+      promptSnippet:
+        "Use the write tool to create files or completely replace file contents. Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it) and prefer edit for targeted changes.",
+      // Internal validation schema is a strict superset of the DeepSeek Harness
+      // wire schema. prepareArguments adds Pi-native aliases before *any* tool_call
+      // extension runs. before_provider_request strips these aliases from the schema
+      // advertised to the model, so model-facing parameters stay Harness-exact.
+      parameters: Type.Object(
+        {
+          file_path: Type.String({
+            description: "Path to write, resolved by the filesystem backend.",
           }),
-        ),
-        // Compatibility aliases are internal-only; the provider guard removes them
-        // from the schema sent to DeepSeek.
-        path: Type.Optional(Type.String()),
-        oldText: Type.Optional(Type.String()),
-        newText: Type.Optional(Type.String()),
-        edits: Type.Optional(
-          Type.Array(
-            Type.Object(
-              {
-                oldText: Type.String(),
-                newText: Type.String(),
-                replaceAll: Type.Optional(Type.Boolean()),
-              },
-              { additionalProperties: false },
+          content: Type.String({ description: "Full UTF-8 text content to write." }),
+          path: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+      prepareArguments: prepareDeepSeekWriteArgsForPi,
+      executionMode: "sequential",
+      // Explicitly override Pi built-in renderer inheritance. Because the tool name
+      // is `write`, Pi may inherit built-in presentation defaults unless this is set.
+      // DeepSeek file mutations should use the same boxed shell as str_replace_editor.
+      renderShell: "default",
+      renderCall: (args, theme, context) => renderMutationCall("write", "M", args, theme, context),
+      renderResult: (result, options, theme, context) =>
+        renderMutationResult("write", result, options, theme, context),
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const normalized = normalizeDeepSeekWriteArgs(params as any);
+        const outcome = await getDeepSeekFsRuntime(ctx).write(
+          normalized.filePath,
+          normalized.content,
+          signal,
+        );
+        const diff =
+          outcome.before === null
+            ? generateDiffString("", outcome.after).diff
+            : generateDiffString(outcome.before, outcome.after).diff;
+        return resultText(formatDeepSeekWriteOutput(outcome.path, outcome.operation), {
+          target: outcome.path,
+          action: outcome.operation === "create" ? "A" : "M",
+          diff,
+        });
+      },
+    },
+  );
+}
+
+function registerDeepSeekEdit(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "edit",
+      provider: "deepseek",
+      capabilities: ["filesystem:read", "filesystem:write"],
+      tags: ["mutation", "edit"],
+    },
+    {
+      name: "edit",
+      label: "edit",
+      description: "Edit an existing UTF-8 text file by replacing literal text.",
+      promptSnippet:
+        "Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session.",
+      parameters: Type.Object(
+        {
+          file_path: Type.String({
+            description: "Path to edit, resolved by the filesystem backend.",
+          }),
+          old_string: Type.String({ description: "Literal text to replace. Must match exactly." }),
+          new_string: Type.String({
+            description: "Literal replacement text. Use an empty string to delete the match.",
+          }),
+          replace_all: Type.Optional(
+            Type.Boolean({
+              description:
+                "Replace all matches. Defaults to false; when false, old_string must appear exactly once.",
+            }),
+          ),
+          // Compatibility aliases are internal-only; the provider guard removes them
+          // from the schema sent to DeepSeek.
+          path: Type.Optional(Type.String()),
+          oldText: Type.Optional(Type.String()),
+          newText: Type.Optional(Type.String()),
+          edits: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  oldText: Type.String(),
+                  newText: Type.String(),
+                  replaceAll: Type.Optional(Type.Boolean()),
+                },
+                { additionalProperties: false },
+              ),
             ),
           ),
-        ),
+        },
+        { additionalProperties: false },
+      ),
+      prepareArguments: prepareDeepSeekEditArgsForPi,
+      executionMode: "sequential",
+      // Pi special-cases built-in `edit` with renderShell: "self". ToolExecutionComponent
+      // inherits that shell when a replacement definition omits renderShell, which is why
+      // DeepSeek edit was rendered as an unboxed native-style diff. Force the default
+      // boxed shell so its presentation matches str_replace_editor.
+      renderShell: "default",
+      renderCall: (args, theme, context) => renderMutationCall("edit", "M", args, theme, context),
+      renderResult: (result, options, theme, context) =>
+        renderMutationResult("edit", result, options, theme, context),
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const normalized = normalizeDeepSeekEditArgs(params as any);
+        const replaceAll = normalized.replaceAll;
+        const outcome = await getDeepSeekFsRuntime(ctx).edit(
+          normalized.filePath,
+          normalized.oldString,
+          normalized.newString,
+          replaceAll,
+          signal,
+        );
+        return resultText(formatDeepSeekEditOutput(outcome.path, replaceAll), {
+          target: outcome.path,
+          action: "M",
+          diff: generateDiffString(outcome.before, outcome.after).diff,
+        });
       },
-      { additionalProperties: false },
-    ),
-    prepareArguments: prepareDeepSeekEditArgsForPi,
-    executionMode: "sequential",
-    // Pi special-cases built-in `edit` with renderShell: "self". ToolExecutionComponent
-    // inherits that shell when a replacement definition omits renderShell, which is why
-    // DeepSeek edit was rendered as an unboxed native-style diff. Force the default
-    // boxed shell so its presentation matches str_replace_editor.
-    renderShell: "default",
-    renderCall: (args, theme, context) => renderMutationCall("edit", "M", args, theme, context),
-    renderResult: (result, options, theme, context) =>
-      renderMutationResult("edit", result, options, theme, context),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const normalized = normalizeDeepSeekEditArgs(params as any);
-      const replaceAll = normalized.replaceAll;
-      const outcome = await getDeepSeekFsRuntime(ctx).edit(
-        normalized.filePath,
-        normalized.oldString,
-        normalized.newString,
-        replaceAll,
-        signal,
-      );
-      return resultText(formatDeepSeekEditOutput(outcome.path, replaceAll), {
-        target: outcome.path,
-        action: "M",
-        diff: generateDiffString(outcome.before, outcome.after).diff,
-      });
     },
-  });
+  );
 }
 
-export function registerDeepSeekFilesystemTools(pi: ExtensionAPI): void {
-  registerDeepSeekRead(pi);
-  registerDeepSeekWrite(pi);
-  registerDeepSeekEdit(pi);
+export function registerDeepSeekFilesystemTools(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+  registerDeepSeekRead(pi, hooks);
+  registerDeepSeekWrite(pi, hooks);
+  registerDeepSeekEdit(pi, hooks);
 }
 
 export function registerDeepSeekMutationCompatibilityHook(
@@ -477,12 +518,46 @@ export function registerDeepSeekMutationCompatibilityHook(
   });
 }
 
-export function registerPiFilesystemTools(pi: ExtensionAPI, cwd: string): void {
+export function registerPiFilesystemTools(
+  pi: ExtensionAPI,
+  cwd: string,
+  hooks?: EditModesHookHost,
+): void {
   // Re-register Pi's own definitions over our DeepSeek overrides. This preserves
   // Pi's native schemas/semantics outside DeepSeek mode after a mode switch.
-  pi.registerTool(createReadToolDefinition(cwd) as any);
-  pi.registerTool(createWriteToolDefinition(cwd) as any);
-  pi.registerTool(createEditToolDefinition(cwd) as any);
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "read",
+      provider: "pi",
+      capabilities: ["filesystem:read"],
+      tags: ["read", "native"],
+    },
+    createReadToolDefinition(cwd) as any,
+  );
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "write",
+      provider: "pi",
+      capabilities: ["filesystem:write"],
+      tags: ["mutation", "write", "native"],
+    },
+    createWriteToolDefinition(cwd) as any,
+  );
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "edit",
+      provider: "pi",
+      capabilities: ["filesystem:read", "filesystem:write"],
+      tags: ["mutation", "edit", "native"],
+    },
+    createEditToolDefinition(cwd) as any,
+  );
   clearDeepSeekFsRuntimes();
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "pi-edit-modes",
-  "version": "0.2.7",
-  "description": "Model-aware Pi file editing modes aligned with Codex, Gemini CLI, and DeepSeek Harness tool surfaces.",
+  "version": "0.3.1",
+  "description": "Model-aware Pi file editing modes with a public hook API for tool and mode customization.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -54,6 +54,11 @@
     ".": {
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "import": "./dist/hooks.js",
+      "default": "./dist/hooks.js"
     }
   },
   "packageManager": "pnpm@12.3.4"
