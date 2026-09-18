@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
-export type EditModesHookToolMode = "pi" | "codex" | "gemini" | "deepseek";
+export type EditModesHookToolMode = "pi" | "codex" | "gemini" | "deepseek" | "all";
 export type EditModesHookSessionToolMode = EditModesHookToolMode | "auto";
 export type EditModesHookToolSurface = "replace" | "additive";
 export type EditModesHookSessionToolSurface = EditModesHookToolSurface | "auto";

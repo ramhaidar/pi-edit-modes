@@ -4,6 +4,10 @@ Detailed surface semantics and upstream-aligned behavior for Codex, Gemini CLI, 
 
 Focused per-model references: [Gemini](GEMINI.md), [Codex](CODEX.md), and [DeepSeek](DEEPSEEK.md). This document covers the shared surface, provider-guard, and cross-mode runtime behavior.
 
+## All-tools mode
+
+Select `all` with `/tool-mode all`, `--tool-mode all`, `defaultMode: "all"`, or the `/tool-mode` popup. It activates every available file-editing tool from this package at once: custom DeepSeek `read`/`edit`/`write` owns those duplicate names, alongside Codex `apply_patch`, Gemini `replace`/`write_file`, DeepSeek `str_replace_editor`, and `read_image` for image-capable models. Excluded or unavailable tools are not resurrected. `bash-only` remains authoritative and removes every mutating file tool.
+
 ## Surface semantics
 
 ### `replace`

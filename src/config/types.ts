@@ -1,4 +1,4 @@
-export type ToolMode = "pi" | "codex" | "gemini" | "deepseek";
+export type ToolMode = "pi" | "codex" | "gemini" | "deepseek" | "all";
 export type SessionToolMode = ToolMode | "auto";
 export type ToolSurface = "replace" | "additive";
 export type SessionToolSurface = ToolSurface | "auto";

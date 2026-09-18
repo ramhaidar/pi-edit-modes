@@ -69,7 +69,7 @@ function parseToolModeFlag(value: unknown): { mode: SessionToolMode; warning?: s
   if (text === "auto" || isToolMode(text)) return { mode: text as SessionToolMode };
   return {
     mode: "auto",
-    warning: `Invalid --tool-mode '${text}'. Expected auto, gemini, codex, deepseek, or pi. Using auto.`,
+    warning: `Invalid --tool-mode '${text}'. Expected auto, gemini, codex, deepseek, all, or pi. Using auto.`,
   };
 }
 
@@ -165,6 +165,8 @@ function surfaceLabel(surface: ManagedSurface): string {
       return "deepseek / replace";
     case "deepseek-additive":
       return "deepseek / additive";
+    case "all":
+      return "all editing tools";
     case "codex-unavailable":
       return "pi fallback (codex unavailable)";
     case "gemini-unavailable":
@@ -177,7 +179,7 @@ function surfaceLabel(surface: ManagedSurface): string {
 export default function editModesExtension(pi: ExtensionAPI): void {
   const hooks = createEditModesHookHost(pi);
   pi.registerFlag("tool-mode", {
-    description: "File tool mode: auto, gemini, codex, deepseek, or pi",
+    description: "File tool mode: auto, gemini, codex, deepseek, all, or pi",
     type: "string",
   });
   pi.registerFlag("tool-surface", {
@@ -308,7 +310,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     currentResolution = resolution;
     const deepseekPreset: DeepSeekPreset = snapshot.settings.deepseek.preset;
     let definitionsChanged = setFilesystemToolFlavor(
-      !bashOnly && resolution.mode === "deepseek" && deepseekPreset === "standard"
+      !bashOnly && (resolution.mode === "deepseek" || resolution.mode === "all")
         ? "deepseek"
         : "pi",
       ctx?.cwd ?? process.cwd(),
@@ -454,7 +456,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   registerGeminiTools(pi, hooks);
 
   pi.on("tool_call", async (event: any, ctx: any) => {
-    if (currentResolution.mode !== "gemini") return;
+    if (currentResolution.mode !== "gemini" && currentResolution.mode !== "all") return;
     const gemini = store.snapshot().settings.gemini;
     return handleGeminiToolCall(
       event,
@@ -469,7 +471,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     description: "Show or change file tool mode",
     getArgumentCompletions: (prefix) => {
       const text = prefix.trim().toLowerCase();
-      const values: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek", "pi"];
+      const values: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek", "all", "pi"];
       const matches = values.filter((value) => value.startsWith(text));
       return matches.length ? matches.map((value) => ({ value, label: value })) : null;
     },
@@ -478,7 +480,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       if (requested) {
         if (requested !== "auto" && !isToolMode(requested)) {
           ctx.ui.notify(
-            `Invalid tool mode '${requested}'. Expected auto, gemini, codex, deepseek, or pi.`,
+            `Invalid tool mode '${requested}'. Expected auto, gemini, codex, deepseek, all, or pi.`,
             "error",
           );
           return;

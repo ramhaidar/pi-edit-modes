@@ -35,6 +35,12 @@ test("valid partial config merges with defaults", () => {
   assert.equal(parsed.settings.deepseek.preset, "standard");
 });
 
+test("all is a valid default and session tool mode", () => {
+  const parsed = parseSettings({ version: 1, defaultMode: "all" });
+  assert.equal(parsed.warning, undefined);
+  assert.equal(parsed.settings.defaultMode, "all");
+});
+
 test("bashOnly defaults to false and accepts an explicit boolean", () => {
   assert.equal(DEFAULT_SETTINGS.bashOnly, false);
   const parsed = parseSettings({ version: 1, bashOnly: true });

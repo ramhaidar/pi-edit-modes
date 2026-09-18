@@ -23,7 +23,7 @@ Pi runtime packages are peer dependencies and also dev dependencies so a clean c
 
 Defaults are `defaultMode: "pi"`, strict `surface: "replace"`, `bashOnly: false`, Gemini `approval: "ask_user"`, Gemini `disableLLMCorrection: true`, and DeepSeek `preset: "standard"`. Settings live at `~/.pi/agent/edit-modes.json`.
 
-Runtime controls are `/tool-mode`, `/tool-surface`, and `/bash-only`; the deprecated `/apply-patch-mode` alias remains for migration. `--bash-only` and `--no-bash-only` override the setting for a single run. See [Configuration](docs/CONFIGURATION.md) for precedence, CLI/session overrides, the complete settings schema, bash-only semantics, `models.json` overrides, migration behavior, and command syntax.
+Runtime controls are `/tool-mode`, `/tool-surface`, and `/bash-only`; `/tool-mode all` (also available in the popup) exposes every available file-editing tool. The deprecated `/apply-patch-mode` alias remains for migration. `--bash-only` and `--no-bash-only` override the setting for a single run. See [Configuration](docs/CONFIGURATION.md) for precedence, CLI/session overrides, the complete settings schema, bash-only semantics, `models.json` overrides, migration behavior, and command syntax.
 
 ## Bash-only override
 

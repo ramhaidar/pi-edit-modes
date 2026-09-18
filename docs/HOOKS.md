@@ -95,7 +95,7 @@ Runs before the built-in resolver. It may override:
 
 ```ts
 {
-  sessionMode?: "auto" | "pi" | "codex" | "gemini" | "deepseek";
+  sessionMode?: "auto" | "pi" | "codex" | "gemini" | "deepseek" | "all";
   sessionSurface?: "auto" | "replace" | "additive";
   sessionBashOnly?: boolean | "auto";
 }

@@ -63,6 +63,34 @@ test("Codex provider availability follows effective active surface, not register
   assert.equal(codexProviderToolAvailable("gemini-replace", ["apply_patch"]), false);
 });
 
+test("all mode preserves every active editing tool in provider payloads", () => {
+  const names = [
+    "read",
+    "edit",
+    "write",
+    "apply_patch",
+    "replace",
+    "write_file",
+    "str_replace_editor",
+    "read_image",
+  ];
+  const payload = { tools: names.map((name) => ({ type: "function", function: { name } })) };
+  const result = guardProviderPayload({
+    payload,
+    mode: "all",
+    surface: "all",
+    codexSupport: compatibilitySupport,
+    codexGuard: passthroughCodexGuard,
+    activeTools: names,
+    deepseekPreset: "standard",
+  });
+  assert.equal(result.fatal, undefined);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.function.name),
+    names,
+  );
+});
+
 test("Gemini mode removes stale apply_patch from native Google functionDeclarations", () => {
   const payload = {
     model: "gemini-x",

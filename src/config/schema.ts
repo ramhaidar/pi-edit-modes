@@ -25,7 +25,13 @@ export const DEFAULT_SETTINGS: EditModesSettings = {
 };
 
 export function isToolMode(value: unknown): value is ToolMode {
-  return value === "pi" || value === "codex" || value === "gemini" || value === "deepseek";
+  return (
+    value === "pi" ||
+    value === "codex" ||
+    value === "gemini" ||
+    value === "deepseek" ||
+    value === "all"
+  );
 }
 
 export function isToolSurface(value: unknown): value is ToolSurface {

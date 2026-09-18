@@ -31,6 +31,7 @@ export type ManagedSurface =
   | "gemini-additive"
   | "deepseek-replace"
   | "deepseek-additive"
+  | "all"
   | "codex-unavailable"
   | "gemini-unavailable"
   | "deepseek-unavailable";
@@ -117,7 +118,7 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
 
   const availableGemini = GEMINI_TOOL_NAMES.filter((name) => input.availableTools.has(name));
   const codexActive =
-    input.desiredMode === "codex" &&
+    (input.desiredMode === "codex" || input.desiredMode === "all") &&
     input.codexSupported &&
     input.availableTools.has("apply_patch");
   const geminiActive = input.desiredMode === "gemini" && availableGemini.length > 0;
@@ -129,9 +130,11 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   const deepseekActive =
     input.desiredMode === "deepseek" &&
     (deepseekPreset === "minimal" ? deepseekMinimalAvailable : deepseekStandardAvailable);
+  const allActive = input.desiredMode === "all";
   const bashOnly = input.bashOnly === true;
   const suppressEditWrite =
-    bashOnly || ((codexActive || geminiActive) && input.surface === "replace");
+    bashOnly ||
+    (input.desiredMode !== "all" && (codexActive || geminiActive) && input.surface === "replace");
   const suppressDeepSeekMinimal =
     !bashOnly && deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
   const suppressNative = suppressEditWrite || suppressDeepSeekMinimal;
@@ -186,6 +189,18 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
       for (const name of availableGemini) if (!tools.includes(name)) tools.push(name);
       surface = input.surface === "additive" ? "gemini-additive" : "gemini-replace";
     }
+  } else if (allActive) {
+    if (codexActive) tools.push("apply_patch");
+    for (const name of availableGemini) if (!tools.includes(name)) tools.push(name);
+    for (const name of ["str_replace_editor"] as const)
+      if (input.availableTools.has(name) && !tools.includes(name)) tools.push(name);
+    if (
+      input.deepseekImageSupported &&
+      input.availableTools.has("read_image") &&
+      !tools.includes("read_image")
+    )
+      tools.push("read_image");
+    surface = "all";
   } else if (!deepseekActive) {
     surface = "deepseek-unavailable";
   } else {

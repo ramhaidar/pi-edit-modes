@@ -27,7 +27,7 @@ export function codexProviderToolAvailable(
   activeTools: readonly string[],
 ): boolean {
   return (
-    (surface === "codex-replace" || surface === "codex-additive") &&
+    (surface === "codex-replace" || surface === "codex-additive" || surface === "all") &&
     activeTools.includes("apply_patch")
   );
 }
@@ -689,6 +689,26 @@ export function guardProviderPayload(input: {
   }
 
   const forbidden = new Set<string>(["apply_patch", ...deprecatedGemini]);
+  if (input.mode === "all") {
+    forbidden.delete("apply_patch");
+    if (input.activeTools && !input.activeTools.includes("apply_patch"))
+      forbidden.add("apply_patch");
+    for (const name of GEMINI_TOOL_NAMES)
+      if (input.activeTools && !input.activeTools.includes(name)) forbidden.add(name);
+    for (const name of DEEPSEEK_TOOL_NAMES)
+      if (input.activeTools && !input.activeTools.includes(name)) forbidden.add(name);
+    const stripped = stripTools(input.payload, forbidden);
+    if (stripped.fatal) return stripped;
+    const codex = input.codexGuard(stripped.payload, input.codexSupport);
+    const combined = mergeGuardResults(stripped, codex);
+    if (combined.fatal) return combined;
+    const google = rewriteGoogleCompatibilityApplyPatch(combined.payload, input.codexSupport);
+    const withCodex = mergeGuardResults(combined, google);
+    if (withCodex.fatal) return withCodex;
+    const gemini = rewriteGeminiDescriptions(withCodex.payload, input.modelId);
+    const withGemini = mergeGuardResults(withCodex, gemini);
+    return mergeGuardResults(withGemini, rewriteDeepSeekFileToolSchemas(withGemini.payload));
+  }
   if (input.mode === "pi") {
     for (const name of GEMINI_TOOL_NAMES) forbidden.add(name);
     for (const name of DEEPSEEK_TOOL_NAMES) forbidden.add(name);

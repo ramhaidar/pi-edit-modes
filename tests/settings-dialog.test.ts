@@ -51,6 +51,26 @@ function drive(initial: {
   return saved?.action === "save" ? saved.draft : undefined;
 }
 
+test("all mode is available in the popup session and default selectors", () => {
+  const draft = drive({ select: 0, presses: ["\x1b[C", "\x1b[C", "\x1b[C", "\x1b[C"] });
+  assert.equal(draft?.sessionMode, "all");
+
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.defaultMode = "all";
+  const dialog = new SettingsDialog(
+    { sessionMode: "auto", sessionSurface: "auto", sessionBashOnly: "auto", settings },
+    "test/model",
+    "pi",
+    "pi (edit/write)",
+    undefined,
+    "default",
+    theme,
+    () => {},
+    () => {},
+  );
+  assert.match(dialog.render(76).join("\n"), /all/);
+});
+
 test("bash-only rows render in the dialog", () => {
   const settings = structuredClone(DEFAULT_SETTINGS);
   const dialog = new SettingsDialog(

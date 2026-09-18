@@ -15,10 +15,16 @@ export interface SettingsDialogDraft {
 
 export type DialogResult = { action: "save"; draft: SettingsDialogDraft } | { action: "cancel" };
 
-const SESSION_MODES: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek", "pi"];
+const SESSION_MODES: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek", "all", "pi"];
 const SESSION_SURFACES: SessionToolSurface[] = ["auto", "replace", "additive"];
 const SESSION_BASH_ONLY: SessionBashOnly[] = ["auto", false, true];
-const DEFAULT_MODES: EditModesSettings["defaultMode"][] = ["pi", "gemini", "codex", "deepseek"];
+const DEFAULT_MODES: EditModesSettings["defaultMode"][] = [
+  "pi",
+  "gemini",
+  "codex",
+  "deepseek",
+  "all",
+];
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
 const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];

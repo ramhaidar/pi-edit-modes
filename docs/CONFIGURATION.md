@@ -28,7 +28,7 @@ Bash-only resolution:
 
 ## Settings file
 
-Settings are stored in `~/.pi/agent/edit-modes.json`:
+Settings are stored in `~/.pi/agent/edit-modes.json`: Set `defaultMode` to `"all"` to expose every available file-editing tool.
 
 ```json
 {
@@ -140,7 +140,7 @@ The package reads raw `models.json`, strips UTF-8 BOM/comments using Pi-compatib
 ## Commands
 
 - `/tool-mode` opens the settings overlay.
-- `/tool-mode auto|gemini|codex|deepseek|pi` changes the runtime session mode override.
+- `/tool-mode auto|gemini|codex|deepseek|all|pi` changes the runtime session mode override.
 - `/tool-surface auto|replace|additive` changes the runtime session surface override.
 - `/bash-only on|off|auto|toggle` changes the runtime session bash-only override.
 - `/apply-patch-mode replace|additive|off` is a deprecated compatibility alias.
