@@ -11,6 +11,8 @@ Supported modes:
 
 The package targets model-facing contract and editing-flow alignment. Host capabilities that Pi cannot reproduce are documented explicitly rather than hidden.
 
+An independent `bashOnly` switch is also available: when on, every write/edit/delete-capable file tool is removed regardless of mode or surface, and `bash` becomes the only mutation path.
+
 ## Install
 
 Install the folder/package through Pi's package mechanism, or place it where Pi loads package resources. The extension entry point is declared in `package.json` under `pi.extensions`.
@@ -19,9 +21,13 @@ Pi runtime packages are peer dependencies and also dev dependencies so a clean c
 
 ## Configuration
 
-Defaults are `defaultMode: "pi"`, strict `surface: "replace"`, Gemini `approval: "ask_user"`, Gemini `disableLLMCorrection: true`, and DeepSeek `preset: "standard"`. Settings live at `~/.pi/agent/edit-modes.json`.
+Defaults are `defaultMode: "pi"`, strict `surface: "replace"`, `bashOnly: false`, Gemini `approval: "ask_user"`, Gemini `disableLLMCorrection: true`, and DeepSeek `preset: "standard"`. Settings live at `~/.pi/agent/edit-modes.json`.
 
-Runtime controls are `/tool-mode` and `/tool-surface`; the deprecated `/apply-patch-mode` alias remains for migration. See [Configuration](docs/CONFIGURATION.md) for precedence, CLI/session overrides, the complete settings schema, `models.json` overrides, migration behavior, and command syntax.
+Runtime controls are `/tool-mode`, `/tool-surface`, and `/bash-only`; the deprecated `/apply-patch-mode` alias remains for migration. `--bash-only` and `--no-bash-only` override the setting for a single run. See [Configuration](docs/CONFIGURATION.md) for precedence, CLI/session overrides, the complete settings schema, bash-only semantics, `models.json` overrides, migration behavior, and command syntax.
+
+## Bash-only override
+
+`bashOnly` is a master switch that wins over mode and surface. When enabled it removes native `edit`/`write` and every managed custom tool (`apply_patch`, `replace`, `write_file`, `str_replace_editor`, DeepSeek `write`/`edit`, and `read_image`), leaving only the Pi-native read-only tools (`read`, `grep`, `find`, `ls`) and the shell (`bash`, or `powershell`) active, so `bash` is the only way to change files. If no shell tool is available it still fails closed and warns; it never silently re-enables `edit`/`write`. See [Tool flows](docs/TOOL-FLOWS.md#bash-only) and [Configuration](docs/CONFIGURATION.md#bash-only-override).
 
 ## Tool-flow summary
 

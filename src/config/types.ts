@@ -2,6 +2,8 @@ export type ToolMode = "pi" | "codex" | "gemini" | "deepseek";
 export type SessionToolMode = ToolMode | "auto";
 export type ToolSurface = "replace" | "additive";
 export type SessionToolSurface = ToolSurface | "auto";
+/** Session-scoped bash-only override. `"auto"` defers to the persisted setting. */
+export type SessionBashOnly = boolean | "auto";
 export type GeminiApprovalMode = "ask_user" | "auto_edit";
 export type DeepSeekPreset = "standard" | "minimal";
 // Backward-compatible source alias for integrations that imported the old type name.
@@ -11,6 +13,12 @@ export interface EditModesSettings {
   version: 1;
   defaultMode: ToolMode;
   surface: ToolSurface;
+  /**
+   * Bash-only override. When true it is authoritative over mode and surface:
+   * every mutating file tool (native edit/write and all managed custom tools)
+   * is removed so the shell is the only mutation path. Read-only tools stay.
+   */
+  bashOnly: boolean;
   autoDiscovery: {
     enabled: boolean;
     gemini: boolean;

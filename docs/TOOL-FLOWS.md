@@ -21,6 +21,18 @@ If another extension reactivates a forbidden native tool, synchronization remove
 
 `additive` is intentionally a hybrid surface, not an exact-upstream parity claim. Native and custom tools may coexist.
 
+### `bash-only`
+
+`bash-only` is an independent master switch (`bashOnly`), not a third surface value. It is authoritative over both mode and surface: when it is on, every write/edit/delete-capable file tool is removed regardless of the resolved mode, including on the `additive` surface.
+
+Removed: native `edit`/`write` and every managed custom tool - Codex `apply_patch`, Gemini `replace`/`write_file`, DeepSeek `standard` `write`/`edit`, DeepSeek minimal `str_replace_editor` (its `create`/`str_replace`/`insert` commands mutate files), and the read-only DeepSeek `read_image`. Managed custom tools are mode-owned, and bash-only disables the modes wholesale, so even the read-only one goes.
+
+Preserved: the Pi-native read-only tools (`read`, `grep`, `find`, `ls`), the shell (`bash`, or `powershell` on Windows), and any unrelated tool owned by another extension. The shell is therefore the only mutation path.
+
+Like the strict `replace` surfaces, bash-only re-removes a forbidden tool if another extension reactivates it, and `before_provider_request` applies the same restriction directly to OpenAI/Anthropic top-level `tools`, Google `functionDeclarations`, and Google `allowedFunctionNames`. A provider that forces one of the stripped tools is treated as a fatal invariant violation, matching existing strict-surface behavior.
+
+Native `edit`/`write` removals are tracked in the same ownership record as strict surfaces, so turning bash-only off restores them at their original positions. Pi exposes no native delete/`rm` tool, so "delete" is covered by the mutation commands of the disabled custom tools rather than by a dedicated tool.
+
 ## Gemini semantics
 
 ### `replace`

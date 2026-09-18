@@ -4,6 +4,7 @@ import {
   DEEPSEEK_TOOL_NAMES,
   DEPRECATED_GEMINI_TOOL_NAMES,
   GEMINI_TOOL_NAMES,
+  MANAGED_CUSTOM_TOOLS,
   type ManagedSurface,
 } from "./router.ts";
 
@@ -650,9 +651,18 @@ export function guardProviderPayload(input: {
   codexGuard: CodexProviderGuard;
   activeTools?: readonly string[];
   surface?: ManagedSurface;
+  bashOnly?: boolean;
   deepseekPreset?: DeepSeekPreset;
   modelId?: string;
 }): ProviderGuardResult {
+  // Bash-only is authoritative over mode/surface: native edit/write and every
+  // managed custom tool are removed so the shell is the only mutation path.
+  // Pi-native read-only tools are deliberately left untouched.
+  if (input.bashOnly === true || input.surface === "bash-only") {
+    const forbidden = new Set<string>(["edit", "write", ...MANAGED_CUSTOM_TOOLS]);
+    return stripTools(input.payload, forbidden);
+  }
+
   const strictSurface = input.surface?.endsWith("-replace") === true;
   const deprecatedGemini = new Set<string>(DEPRECATED_GEMINI_TOOL_NAMES);
   if (input.mode === "codex") {

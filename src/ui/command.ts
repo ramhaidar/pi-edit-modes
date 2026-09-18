@@ -1,6 +1,7 @@
 import type {
   EditModesSettings,
   ModeResolution,
+  SessionBashOnly,
   SessionToolMode,
   SessionToolSurface,
 } from "../config/types.ts";
@@ -14,6 +15,7 @@ export async function openSettingsDialog(input: {
   effectiveReason?: string;
   sessionMode: SessionToolMode;
   sessionSurface: SessionToolSurface;
+  sessionBashOnly: SessionBashOnly;
   settings: EditModesSettings;
 }): Promise<DialogResult | undefined> {
   return input.ctx.ui.custom(
@@ -22,6 +24,7 @@ export async function openSettingsDialog(input: {
         {
           sessionMode: input.sessionMode,
           sessionSurface: input.sessionSurface,
+          sessionBashOnly: input.sessionBashOnly,
           settings: input.settings,
         },
         input.modelLabel,

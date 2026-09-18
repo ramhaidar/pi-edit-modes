@@ -575,6 +575,128 @@ test("DeepSeek Google wire write/edit schemas hide Pi compatibility aliases", ()
   ]);
 });
 
+test("bash-only strips every mutating file tool from native tool arrays", () => {
+  const payload = {
+    tools: [
+      { name: "read" },
+      { name: "edit" },
+      { name: "write" },
+      { name: "bash" },
+      { name: "apply_patch" },
+      { name: "replace" },
+      { name: "write_file" },
+      { name: "str_replace_editor" },
+      { name: "replace_file_content" },
+    ],
+  };
+  const result = guardProviderPayload({
+    payload,
+    mode: "codex",
+    codexSupport: compatibilitySupport,
+    codexGuard: passthroughCodexGuard,
+    bashOnly: true,
+  });
+  assert.equal(result.changed, true);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.name),
+    ["read", "bash"],
+  );
+});
+
+test("bash-only strips mutating tools from Google functionDeclarations", () => {
+  const payload = {
+    model: "gemini-x",
+    config: {
+      tools: [
+        {
+          functionDeclarations: [
+            declaration("replace"),
+            declaration("write_file"),
+            declaration("apply_patch"),
+            declaration("edit"),
+            declaration("read"),
+          ],
+        },
+      ],
+    },
+  };
+  const result = guardProviderPayload({
+    payload,
+    mode: "gemini",
+    codexSupport: compatibilitySupport,
+    codexGuard: passthroughCodexGuard,
+    activeTools: ["read"],
+    bashOnly: true,
+  });
+  assert.equal(result.changed, true);
+  const names = (result.payload as any).config.tools[0].functionDeclarations.map(
+    (x: any) => x.name,
+  );
+  assert.deepEqual(names, ["read"]);
+});
+
+test("bash-only also applies when the surface reports bash-only", () => {
+  const payload = { tools: [{ name: "edit" }, { name: "bash" }] };
+  const result = guardProviderPayload({
+    payload,
+    mode: "pi",
+    codexSupport: unavailableSupport,
+    codexGuard: passthroughCodexGuard,
+    surface: "bash-only",
+    activeTools: ["bash"],
+  });
+  assert.equal(result.changed, true);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.name),
+    ["bash"],
+  );
+});
+
+test("bash-only stays fatal when the provider forces a stripped tool", () => {
+  const payload = { tools: [{ name: "edit" }, { name: "bash" }], tool_choice: "edit" };
+  const result = guardProviderPayload({
+    payload,
+    mode: "pi",
+    codexSupport: unavailableSupport,
+    codexGuard: passthroughCodexGuard,
+    bashOnly: true,
+    activeTools: ["bash"],
+  });
+  assert.equal(result.fatal, true);
+  assert.match(result.violation ?? "", /forbidden tool 'edit'/);
+});
+
+test("bash-only leaves read-only tools and shell untouched", () => {
+  const payload = {
+    tools: [{ name: "read" }, { name: "grep" }, { name: "find" }, { name: "ls" }, { name: "bash" }],
+  };
+  const result = guardProviderPayload({
+    payload,
+    mode: "pi",
+    codexSupport: unavailableSupport,
+    codexGuard: passthroughCodexGuard,
+    bashOnly: true,
+  });
+  assert.equal(result.changed, false);
+  assert.equal(result.payload, payload);
+});
+
+test("bash-only strips mode-owned managed tools even when they only read", () => {
+  const payload = { tools: [{ name: "read" }, { name: "read_image" }, { name: "bash" }] };
+  const result = guardProviderPayload({
+    payload,
+    mode: "deepseek",
+    codexSupport: unavailableSupport,
+    codexGuard: passthroughCodexGuard,
+    bashOnly: true,
+  });
+  assert.equal(result.changed, true);
+  assert.deepEqual(
+    (result.payload as any).tools.map((tool: any) => tool.name),
+    ["read", "bash"],
+  );
+});
+
 test("DeepSeek Anthropic wire write/edit schemas hide Pi compatibility aliases", () => {
   const payload = {
     tools: [

@@ -97,14 +97,15 @@ Runs before the built-in resolver. It may override:
 {
   sessionMode?: "auto" | "pi" | "codex" | "gemini" | "deepseek";
   sessionSurface?: "auto" | "replace" | "additive";
+  sessionBashOnly?: boolean | "auto";
 }
 ```
 
-The hook receives model identity and the current parsed settings as read-only input by convention.
+The hook receives model identity, the current parsed settings (including `bashOnly`), and the current session overrides as read-only input by convention. `sessionBashOnly` follows the same `"auto"` convention: `"auto"` defers to the persisted `bashOnly` setting.
 
 ### `afterModeResolve(context)`
 
-Runs after the built-in resolver and may override the final `ModeResolution` and `ToolSurface` before tool routing is applied.
+Runs after the built-in resolver and may override the final `ModeResolution`, `ToolSurface`, and resolved `bashOnly` flag before tool routing is applied.
 
 ### `onModeChanged(context)`
 

@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: EditModesSettings = {
   version: 1,
   defaultMode: "pi",
   surface: "replace",
+  bashOnly: false,
   autoDiscovery: { enabled: true, gemini: true, codex: true, deepseek: true },
   gemini: {
     approval: "ask_user",
@@ -84,6 +85,8 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
     }
     if (record.surface !== undefined && !isToolSurface(record.surface))
       return fallback(`Invalid surface '${String(record.surface)}'.`);
+    if (record.bashOnly !== undefined && typeof record.bashOnly !== "boolean")
+      return fallback("bashOnly must be boolean.");
     if (legacyCodex.surface !== undefined && !isToolSurface(legacyCodex.surface))
       return fallback(`Invalid legacy codex.surface '${String(legacyCodex.surface)}'.`);
     if (gemini.approval !== undefined && !isGeminiApprovalMode(gemini.approval))
@@ -126,6 +129,8 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
           ? record.defaultMode
           : DEFAULT_SETTINGS.defaultMode,
         surface,
+        bashOnly:
+          typeof record.bashOnly === "boolean" ? record.bashOnly : DEFAULT_SETTINGS.bashOnly,
         autoDiscovery: {
           enabled:
             typeof auto.enabled === "boolean"

@@ -14,8 +14,17 @@ export const MANAGED_CUSTOM_TOOLS = [
   ...DEPRECATED_GEMINI_TOOL_NAMES,
 ] as const;
 
+/**
+ * Pi-native tools that survive the bash-only override. Every managed custom tool
+ * belongs to a mode (Codex, Gemini, or DeepSeek - including the read-only DeepSeek
+ * `read_image`), and bash-only is mode-independent, so all managed custom tools are
+ * removed. Native read-only tools plus the shell remain the whole surface.
+ */
+export const BASH_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+
 export type ManagedSurface =
   | "pi"
+  | "bash-only"
   | "codex-replace"
   | "codex-additive"
   | "gemini-replace"
@@ -86,6 +95,8 @@ export interface TransitionInput {
   availableTools: ReadonlySet<string>;
   desiredMode: ToolMode;
   surface: ToolSurface;
+  /** Authoritative bash-only override. When true, only read-only tools survive. */
+  bashOnly?: boolean;
   codexSupported: boolean;
   deepseekPreset?: DeepSeekPreset;
   deepseekImageSupported?: boolean;
@@ -118,9 +129,11 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   const deepseekActive =
     input.desiredMode === "deepseek" &&
     (deepseekPreset === "minimal" ? deepseekMinimalAvailable : deepseekStandardAvailable);
-  const suppressEditWrite = (codexActive || geminiActive) && input.surface === "replace";
+  const bashOnly = input.bashOnly === true;
+  const suppressEditWrite =
+    bashOnly || ((codexActive || geminiActive) && input.surface === "replace");
   const suppressDeepSeekMinimal =
-    deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
+    !bashOnly && deepseekActive && deepseekPreset === "minimal" && input.surface === "replace";
   const suppressNative = suppressEditWrite || suppressDeepSeekMinimal;
 
   if (!suppressNative) {
@@ -153,7 +166,11 @@ export function computeToolTransition(input: TransitionInput): TransitionResult 
   }
 
   let surface: ManagedSurface;
-  if (input.desiredMode === "pi") {
+  if (bashOnly) {
+    // Authoritative: no mode-specific tool is activated, so bash is the only
+    // remaining mutation path. Read-only tools above are intentionally kept.
+    surface = "bash-only";
+  } else if (input.desiredMode === "pi") {
     surface = "pi";
   } else if (input.desiredMode === "codex") {
     if (!codexActive) {

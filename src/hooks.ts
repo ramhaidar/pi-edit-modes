@@ -13,6 +13,7 @@ export interface EditModesHookSettings {
   version: 1;
   defaultMode: EditModesHookToolMode;
   surface: EditModesHookToolSurface;
+  bashOnly: boolean;
   autoDiscovery: { enabled: boolean; gemini: boolean; codex: boolean; deepseek: boolean };
   gemini: {
     approval: "ask_user" | "auto_edit";
@@ -66,11 +67,13 @@ export interface EditModesBeforeModeResolveContext {
   settings: EditModesHookSettings;
   sessionMode: EditModesHookSessionToolMode;
   sessionSurface: EditModesHookSessionToolSurface;
+  sessionBashOnly: boolean | "auto";
 }
 
 export interface EditModesBeforeModeResolveResult {
   sessionMode?: EditModesHookSessionToolMode;
   sessionSurface?: EditModesHookSessionToolSurface;
+  sessionBashOnly?: boolean | "auto";
 }
 
 export interface EditModesAfterModeResolveContext {
@@ -78,11 +81,13 @@ export interface EditModesAfterModeResolveContext {
   settings: EditModesHookSettings;
   resolution: EditModesHookModeResolution;
   surface: EditModesHookToolSurface;
+  bashOnly: boolean;
 }
 
 export interface EditModesAfterModeResolveResult {
   resolution?: EditModesHookModeResolution;
   surface?: EditModesHookToolSurface;
+  bashOnly?: boolean;
 }
 
 export interface EditModesModeChangedContext {
@@ -311,6 +316,7 @@ export function createEditModesHookHost(pi: ExtensionAPI): EditModesHookHost {
           ...current,
           sessionMode: result.sessionMode ?? current.sessionMode,
           sessionSurface: result.sessionSurface ?? current.sessionSurface,
+          sessionBashOnly: result.sessionBashOnly ?? current.sessionBashOnly,
         };
       }
       return current;
@@ -325,6 +331,7 @@ export function createEditModesHookHost(pi: ExtensionAPI): EditModesHookHost {
           ...current,
           resolution: result.resolution ?? current.resolution,
           surface: result.surface ?? current.surface,
+          bashOnly: result.bashOnly ?? current.bashOnly,
         };
       }
       return current;

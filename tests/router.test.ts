@@ -22,18 +22,136 @@ function step(
   availableTools = all,
   deepseekPreset: "standard" | "minimal" = "standard",
   deepseekImageSupported = false,
+  bashOnly = false,
 ) {
   return computeToolTransition({
     activeTools,
     desiredMode,
     ownership,
     surface,
+    bashOnly,
     codexSupported,
     availableTools,
     deepseekPreset,
     deepseekImageSupported,
   });
 }
+
+test("bash-only removes every mutating tool and keeps read-only tools", () => {
+  const result = step(
+    ["read", "edit", "write", "bash"],
+    "pi",
+    initialToolOwnership(),
+    "replace",
+    true,
+    all,
+    "standard",
+    false,
+    true,
+  );
+  assert.deepEqual(result.nextTools, ["read", "bash"]);
+  assert.equal(result.surface, "bash-only");
+  assert.equal(result.nextOwnership.editRemovedByUs, true);
+  assert.equal(result.nextOwnership.writeRemovedByUs, true);
+});
+
+test("bash-only wins over every custom mode and suppresses its tools", () => {
+  for (const mode of ["codex", "gemini", "deepseek"] as const) {
+    const result = step(
+      ["read", "edit", "write", "bash", "apply_patch", "replace", "write_file"],
+      mode,
+      initialToolOwnership(),
+      "replace",
+      true,
+      all,
+      "standard",
+      false,
+      true,
+    );
+    assert.equal(result.surface, "bash-only", `${mode} should report bash-only`);
+    assert.deepEqual(result.nextTools, ["read", "bash"], `${mode} should strip mutating tools`);
+  }
+});
+
+test("bash-only holds even on the additive surface", () => {
+  const result = step(
+    ["read", "edit", "write", "bash"],
+    "gemini",
+    initialToolOwnership(),
+    "additive",
+    true,
+    all,
+    "standard",
+    false,
+    true,
+  );
+  assert.deepEqual(result.nextTools, ["read", "bash"]);
+  assert.equal(result.surface, "bash-only");
+});
+
+test("leaving bash-only restores native edit/write at their original indices", () => {
+  const bashOnly = step(
+    ["read", "edit", "write", "bash"],
+    "pi",
+    initialToolOwnership(),
+    "replace",
+    true,
+    all,
+    "standard",
+    false,
+    true,
+  );
+  const restored = step(
+    bashOnly.nextTools,
+    "pi",
+    bashOnly.nextOwnership,
+    "replace",
+    true,
+    all,
+    "standard",
+    false,
+    false,
+  );
+  assert.deepEqual(restored.nextTools, ["read", "edit", "write", "bash"]);
+  assert.equal(restored.surface, "pi");
+  assert.equal(restored.nextOwnership.editRemovedByUs, false);
+  assert.equal(restored.nextOwnership.writeRemovedByUs, false);
+});
+
+test("bash-only does not require bash itself to be available", () => {
+  const available = new Set(["read", "edit", "write", "grep"]);
+  const result = step(
+    ["read", "edit", "write", "grep"],
+    "pi",
+    initialToolOwnership(),
+    "replace",
+    true,
+    available,
+    "standard",
+    false,
+    true,
+  );
+  assert.deepEqual(result.nextTools, ["read", "grep"]);
+  assert.equal(result.surface, "bash-only");
+});
+
+test("bash-only removes mode-owned managed tools, including read-only read_image", () => {
+  const result = step(
+    ["read", "read_image", "edit", "write", "bash", "apply_patch"],
+    "deepseek",
+    initialToolOwnership(),
+    "replace",
+    true,
+    all,
+    "standard",
+    true,
+    true,
+  );
+  // read_image only exists inside DeepSeek mode, which bash-only disables, so it
+  // is removed with the rest of the managed custom tools. Pi-native read tools stay.
+  assert.deepEqual(result.nextTools, ["read", "bash"]);
+  assert.equal(result.surface, "bash-only");
+});
 
 test("pi -> codex replace removes edit/write and activates apply_patch", () => {
   const result = step(["read", "edit", "write"], "codex");

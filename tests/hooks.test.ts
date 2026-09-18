@@ -153,6 +153,7 @@ test("mode hooks can override resolution inputs/results and receive lifecycle no
       version: 1,
       defaultMode: "pi",
       surface: "replace",
+      bashOnly: false,
       autoDiscovery: { enabled: true, gemini: true, codex: true, deepseek: true },
       gemini: {
         approval: "ask_user",
@@ -167,18 +168,22 @@ test("mode hooks can override resolution inputs/results and receive lifecycle no
     },
     sessionMode: "auto",
     sessionSurface: "auto",
+    sessionBashOnly: "auto",
   });
   assert.equal(before.sessionMode, "codex");
   assert.equal(before.sessionSurface, "additive");
+  assert.equal(before.sessionBashOnly, "auto");
 
   const after = await host.afterModeResolve({
     model: { provider: "x", id: "y" },
     settings: before.settings,
     resolution: { mode: "codex", source: "session" },
     surface: "additive",
+    bashOnly: false,
   });
   assert.equal(after.resolution.mode, "gemini");
   assert.equal(after.surface, "replace");
+  assert.equal(after.bashOnly, false);
 
   await host.notifyModeChanged({
     previousResolution: { mode: "pi", source: "default" },

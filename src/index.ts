@@ -3,6 +3,7 @@ import type {
   DeepSeekPreset,
   ModelIdentity,
   ModeResolution,
+  SessionBashOnly,
   SessionToolMode,
   SessionToolSurface,
   ToolMode,
@@ -83,6 +84,37 @@ function parseToolSurfaceFlag(value: unknown): { surface: SessionToolSurface; wa
   };
 }
 
+/**
+ * `--bash-only` forces the switch on and `--no-bash-only` forces it off for the
+ * run. Pi registers boolean flags as presence-only, so explicit negation needs
+ * its own flag rather than a value.
+ */
+function parseBashOnlyFlags(
+  on: unknown,
+  off: unknown,
+): {
+  bashOnly: SessionBashOnly;
+  warning?: string;
+} {
+  const onSet = on === true || on === "true";
+  const offSet = off === true || off === "true";
+  if (onSet && offSet)
+    return {
+      bashOnly: "auto",
+      warning:
+        "--bash-only and --no-bash-only were both provided; ignoring both and using edit-modes.json.",
+    };
+  if (onSet) return { bashOnly: true };
+  if (offSet) return { bashOnly: false };
+  return { bashOnly: "auto" };
+}
+
+const SHELL_TOOL_NAMES = ["bash", "powershell"] as const;
+
+function hasShellTool(available: ReadonlySet<string>): boolean {
+  return SHELL_TOOL_NAMES.some((name) => available.has(name));
+}
+
 function parseLegacyApplyPatchMode(value: unknown): {
   mode?: ToolMode;
   surface?: ToolSurface;
@@ -119,6 +151,8 @@ function surfaceLabel(surface: ManagedSurface): string {
   switch (surface) {
     case "pi":
       return "pi (edit/write)";
+    case "bash-only":
+      return "bash-only (no file tools)";
     case "codex-replace":
       return "codex / replace";
     case "codex-additive":
@@ -154,11 +188,20 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     description: "Deprecated: apply_patch surface replace, additive, or off",
     type: "string",
   });
+  pi.registerFlag("bash-only", {
+    description: "Remove all mutating file tools; bash becomes the only mutation path",
+    type: "boolean",
+  });
+  pi.registerFlag("no-bash-only", {
+    description: "Force-disable bash-only for this run, overriding edit-modes.json",
+    type: "boolean",
+  });
 
   const toolModeFlag = pi.getFlag("tool-mode");
   const toolSurfaceFlag = pi.getFlag("tool-surface");
   const parsedCli = parseToolModeFlag(toolModeFlag);
   const parsedSurfaceCli = parseToolSurfaceFlag(toolSurfaceFlag);
+  const parsedBashOnlyCli = parseBashOnlyFlags(pi.getFlag("bash-only"), pi.getFlag("no-bash-only"));
   const newCliModeWasSpecified =
     toolModeFlag !== undefined && toolModeFlag !== null && String(toolModeFlag).trim() !== "";
   const newCliSurfaceWasSpecified =
@@ -176,6 +219,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     parsedSurfaceCli.surface !== "auto" ? parsedSurfaceCli.surface : (legacy.surface ?? "auto");
   let runtimeSessionMode: SessionToolMode = "auto";
   let runtimeSessionSurface: SessionToolSurface = "auto";
+  let runtimeSessionBashOnly: SessionBashOnly = "auto";
 
   const store = new EditModesConfigStore(getAgentDir());
   let ownership = initialToolOwnership();
@@ -224,6 +268,8 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       settings: snapshot.settings,
       sessionMode: effectiveSessionOverride(cliSessionMode, runtimeSessionMode),
       sessionSurface: cliSessionSurface !== "auto" ? cliSessionSurface : runtimeSessionSurface,
+      sessionBashOnly:
+        parsedBashOnlyCli.bashOnly !== "auto" ? parsedBashOnlyCli.bashOnly : runtimeSessionBashOnly,
     });
 
     let resolution = resolveMode({
@@ -236,24 +282,35 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       beforeResolve.sessionSurface === "auto"
         ? snapshot.settings.surface
         : beforeResolve.sessionSurface;
+    const resolvedSessionBashOnly = beforeResolve.sessionBashOnly;
+    let bashOnly =
+      resolvedSessionBashOnly === "auto"
+        ? snapshot.settings.bashOnly
+        : resolvedSessionBashOnly === true;
 
     const afterResolve = await hooks.afterModeResolve({
       model: modelIdentity(model),
       settings: snapshot.settings,
       resolution,
       surface,
+      bashOnly,
     });
     resolution = afterResolve.resolution;
     surface = afterResolve.surface;
+    bashOnly = afterResolve.bashOnly;
     if (!isToolMode(resolution.mode))
       throw new Error(`pi-edit-modes hook returned invalid mode '${String(resolution.mode)}'`);
     if (!isToolSurface(surface))
       throw new Error(`pi-edit-modes hook returned invalid surface '${String(surface)}'`);
+    if (typeof bashOnly !== "boolean")
+      throw new Error(`pi-edit-modes hook returned invalid bashOnly '${String(bashOnly)}'`);
 
     currentResolution = resolution;
     const deepseekPreset: DeepSeekPreset = snapshot.settings.deepseek.preset;
     let definitionsChanged = setFilesystemToolFlavor(
-      resolution.mode === "deepseek" && deepseekPreset === "standard" ? "deepseek" : "pi",
+      !bashOnly && resolution.mode === "deepseek" && deepseekPreset === "standard"
+        ? "deepseek"
+        : "pi",
       ctx?.cwd ?? process.cwd(),
     );
     const available = configuredToolNames(pi);
@@ -263,6 +320,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       availableTools: available,
       desiredMode: resolution.mode,
       surface,
+      bashOnly,
       codexSupported: codexSupport.supported,
       deepseekPreset,
       deepseekImageSupported: modelSupportsImages(model),
@@ -274,6 +332,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     // rather than retaining ownership of edit/write based on an activation that did not stick.
     const active = pi.getActiveTools();
     if (
+      !bashOnly &&
       resolution.mode === "codex" &&
       codexSupport.supported &&
       available.has("apply_patch") &&
@@ -284,13 +343,14 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         availableTools: new Set([...available].filter((name) => name !== "apply_patch")),
         desiredMode: resolution.mode,
         surface,
+        bashOnly,
         codexSupported: false,
         deepseekPreset,
         deepseekImageSupported: modelSupportsImages(model),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
-    } else if (resolution.mode === "gemini") {
+    } else if (!bashOnly && resolution.mode === "gemini") {
       const configuredGemini = GEMINI_TOOL_NAMES.filter((name) => available.has(name));
       if (configuredGemini.length > 0 && !configuredGemini.some((name) => active.includes(name))) {
         const reduced = new Set(
@@ -301,6 +361,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
           availableTools: reduced,
           desiredMode: resolution.mode,
           surface,
+          bashOnly,
           codexSupported: codexSupport.supported,
           deepseekPreset,
           deepseekImageSupported: modelSupportsImages(model),
@@ -309,6 +370,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         setActiveToolsIfChanged(transition.nextTools);
       }
     } else if (
+      !bashOnly &&
       resolution.mode === "deepseek" &&
       deepseekPreset === "minimal" &&
       available.has("str_replace_editor") &&
@@ -322,6 +384,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         availableTools: reduced,
         desiredMode: resolution.mode,
         surface,
+        bashOnly,
         codexSupported: codexSupport.supported,
         deepseekPreset,
         deepseekImageSupported: modelSupportsImages(model),
@@ -332,7 +395,17 @@ export default function editModesExtension(pi: ExtensionAPI): void {
 
     ownership = transition.nextOwnership;
     currentSurface = transition.surface;
-    if (transition.surface === "codex-unavailable") {
+    if (transition.surface === "bash-only") {
+      currentSurfaceReason = hasShellTool(available)
+        ? undefined
+        : "bash-only is enabled, but no shell tool (bash/powershell) is available; no file-mutation path remains";
+      if (!hasShellTool(available)) {
+        warn(
+          ctx,
+          "Bash-only is enabled but no shell tool (bash/powershell) is available. All mutating file tools are removed, so no file-mutation path remains.",
+        );
+      }
+    } else if (transition.surface === "codex-unavailable") {
       currentSurfaceReason =
         codexSupport.reason ??
         "apply_patch is unavailable under the current Pi/provider configuration";
@@ -433,17 +506,22 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         effectiveReason: currentSurfaceReason,
         sessionMode: runtimeSessionMode,
         sessionSurface: runtimeSessionSurface,
+        sessionBashOnly: runtimeSessionBashOnly,
         settings: snapshot.settings,
       });
       if (!result || result.action === "cancel") return;
       runtimeSessionMode = result.draft.sessionMode;
       runtimeSessionSurface = result.draft.sessionSurface;
+      runtimeSessionBashOnly = result.draft.sessionBashOnly;
       await store.save(result.draft.settings);
       await syncTools(ctx.model, ctx, true);
       const notes = [
         cliSessionMode !== "auto" ? `CLI mode '${cliSessionMode}' remains authoritative.` : "",
         cliSessionSurface !== "auto"
           ? `CLI surface '${cliSessionSurface}' remains authoritative.`
+          : "",
+        parsedBashOnlyCli.bashOnly !== "auto"
+          ? `CLI bash-only '${parsedBashOnlyCli.bashOnly ? "on" : "off"}' remains authoritative.`
           : "",
       ]
         .filter(Boolean)
@@ -493,6 +571,49 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("bash-only", {
+    description: "Enable or disable the bash-only override (bash becomes the only mutation path)",
+    getArgumentCompletions: (prefix) => {
+      const text = prefix.trim().toLowerCase();
+      const values = ["on", "off", "auto"] as const;
+      const matches = values.filter((value) => value.startsWith(text));
+      return matches.length ? matches.map((value) => ({ value, label: value })) : null;
+    },
+    handler: async (args, ctx) => {
+      const requested = args.trim().toLowerCase();
+      if (!requested) {
+        ctx.ui.notify(
+          `Session bash-only: ${runtimeSessionBashOnly === "auto" ? "auto" : runtimeSessionBashOnly ? "on" : "off"}. Effective surface: ${surfaceLabel(currentSurface)}.`,
+          "info",
+        );
+        return;
+      }
+      let next: SessionBashOnly;
+      if (requested === "on" || requested === "true" || requested === "enable") next = true;
+      else if (requested === "off" || requested === "false" || requested === "disable")
+        next = false;
+      else if (requested === "auto") next = "auto";
+      else if (requested === "toggle") next = runtimeSessionBashOnly === true ? false : true;
+      else {
+        ctx.ui.notify(
+          `Invalid bash-only value '${requested}'. Expected on, off, auto, or toggle.`,
+          "error",
+        );
+        return;
+      }
+      runtimeSessionBashOnly = next;
+      await syncTools(ctx.model, ctx, true);
+      const cliNote =
+        parsedBashOnlyCli.bashOnly !== "auto"
+          ? `; CLI override '--${parsedBashOnlyCli.bashOnly ? "" : "no-"}bash-only' still has precedence`
+          : "";
+      ctx.ui.notify(
+        `Session bash-only: ${next === "auto" ? "auto" : next ? "on" : "off"}${cliNote}. Effective surface: ${surfaceLabel(currentSurface)}. File tools: ${managedFileToolSurface(pi.getActiveTools())}.`,
+        "info",
+      );
+    },
+  });
+
   pi.registerCommand("apply-patch-mode", {
     description: "Deprecated alias for Codex mode plus universal tool surface",
     getArgumentCompletions: (prefix) => {
@@ -529,6 +650,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     clearGeminiPreparedMutations(ctx);
     if (parsedCli.warning) warn(ctx, parsedCli.warning);
     if (parsedSurfaceCli.warning) warn(ctx, parsedSurfaceCli.warning);
+    if (parsedBashOnlyCli.warning) warn(ctx, parsedBashOnlyCli.warning);
     if (legacy.warning) warn(ctx, legacy.warning);
     if (legacy.mode)
       warn(
@@ -564,6 +686,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       codexGuard: guardCodexProviderPayload,
       activeTools,
       surface: currentSurface,
+      bashOnly: currentSurface === "bash-only",
       deepseekPreset: store.snapshot().settings.deepseek.preset,
       modelId: modelIdentity(ctx.model).id,
     });
