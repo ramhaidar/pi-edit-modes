@@ -3,3 +3,10 @@ clipboard_temp/
 
 # Local Pi session history
 memories/history/
+
+# BEGIN pi-durable-markdown-memory
+/memories/PERSONAL.md
+/memories/history/
+!/memories/
+!/memories/MAIN.md
+# END pi-durable-markdown-memory
