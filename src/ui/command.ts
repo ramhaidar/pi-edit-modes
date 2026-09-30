@@ -39,16 +39,16 @@ export async function openSettingsDialog(input: {
         done,
         () => tui.requestRender(),
       ),
-        {
-          overlay: true,
-          overlayOptions: {
-            anchor: "center",
-            width: 64,
-            // The dialog renders 28-30 lines (17 rows plus header/footer and the
-            // wrapped description of the selected row); the old maxHeight of 26
-            // clipped its bottom. 45 leaves headroom for 3-line descriptions.
-            maxHeight: 45,
-          },
-        },
+    {
+      overlay: true,
+      overlayOptions: {
+        anchor: "center",
+        width: 64,
+        // The dialog renders 28-30 lines (17 rows plus header/footer and the
+        // wrapped description of the selected row); the old maxHeight of 26
+        // clipped its bottom. 45 leaves headroom for 3-line descriptions.
+        maxHeight: 45,
+      },
+    },
   );
 }
