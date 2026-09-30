@@ -24,7 +24,7 @@ export interface EditModesHookSettings {
       customIgnoreFilePaths: string[];
     };
   };
-  deepseek: { preset: "standard" | "minimal" };
+  deepseek: { preset: "standard" | "minimal"; nativeRead: boolean };
 }
 export interface EditModesHookModeResolution {
   mode: EditModesHookToolMode;

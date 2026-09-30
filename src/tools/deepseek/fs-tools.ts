@@ -500,7 +500,35 @@ function registerDeepSeekEdit(pi: ExtensionAPI, hooks?: EditModesHookHost): void
   );
 }
 
-export function registerDeepSeekFilesystemTools(pi: ExtensionAPI, hooks?: EditModesHookHost): void {
+export function registerPiRead(pi: ExtensionAPI, cwd: string, hooks?: EditModesHookHost): void {
+  registerManagedTool(
+    pi,
+    hooks,
+    {
+      name: "read",
+      provider: "pi",
+      capabilities: ["filesystem:read"],
+      tags: ["read", "native"],
+    },
+    createReadToolDefinition(cwd) as any,
+  );
+}
+
+export function registerDeepSeekFilesystemTools(
+  pi: ExtensionAPI,
+  cwd: string,
+  hooks?: EditModesHookHost,
+  options?: { nativeRead?: boolean },
+): void {
+  if (options?.nativeRead) {
+    // Persisted override: keep Pi's native read (which handles images) and only
+    // swap write/edit to the DeepSeek parity tools. read_image is separately
+    // suppressed via deepseekImageSupported.
+    registerPiRead(pi, cwd, hooks);
+    registerDeepSeekWrite(pi, hooks);
+    registerDeepSeekEdit(pi, hooks);
+    return;
+  }
   registerDeepSeekRead(pi, hooks);
   registerDeepSeekWrite(pi, hooks);
   registerDeepSeekEdit(pi, hooks);

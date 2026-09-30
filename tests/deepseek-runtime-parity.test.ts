@@ -10,7 +10,10 @@ import { clearDeepSeekFsRuntimes, getDeepSeekFsRuntime } from "../src/tools/deep
 
 function tools(): any[] {
   const values: any[] = [];
-  registerDeepSeekFilesystemTools({ registerTool: (value: any) => values.push(value) } as any);
+  registerDeepSeekFilesystemTools(
+    { registerTool: (value: any) => values.push(value) } as any,
+    process.cwd(),
+  );
   return values;
 }
 

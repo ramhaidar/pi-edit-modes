@@ -8,8 +8,8 @@ import {
 } from "../src/ui/settings-dialog.ts";
 
 const theme = { fg: (_token: string, text: string) => text };
-const TOTAL_ROWS = 17; // rows 0..15 plus the save row
-const SAVE_ROW = 16;
+const TOTAL_ROWS = 18; // rows 0..16 plus the save row
+const SAVE_ROW = 17;
 
 /**
  * SettingsDialog clones the draft it is given, so tests must drive the dialog to
@@ -146,6 +146,34 @@ test("session bash-only cycles auto -> off -> on and only affects the session dr
   const draft = drive({ select: 2, presses: ["\x1b[C", "\x1b[C", "\x1b[C", "\x1b[C"] });
   assert.equal(draft?.sessionBashOnly, false);
   assert.equal(draft?.settings.bashOnly, false);
+});
+
+test("deepseek native read row renders and toggles the persisted setting", () => {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  const dialog = new SettingsDialog(
+    {
+      sessionMode: "auto",
+      sessionSurface: "auto",
+      sessionBashOnly: "auto",
+      sessionDisableReadImage: "auto",
+      settings,
+    },
+    "test/model",
+    "pi",
+    "pi (edit/write)",
+    undefined,
+    "default",
+    theme,
+    () => {},
+    () => {},
+  );
+  const rendered = dialog.render(76).join("\n");
+  assert.match(rendered, /DeepSeek native read/);
+
+  const draft = drive({ select: 16, presses: ["\x1b[C"] });
+  assert.equal(draft?.settings.deepseek.nativeRead, true);
+  // The session-scoped read_image override stays untouched by the persisted toggle.
+  assert.equal(draft?.sessionDisableReadImage, "auto");
 });
 
 test("every row index is reachable and the save row is last", () => {

@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: EditModesSettings = {
       customIgnoreFilePaths: [],
     },
   },
-  deepseek: { preset: "standard" },
+  deepseek: { preset: "standard", nativeRead: false },
 };
 
 export function isToolMode(value: unknown): value is ToolMode {
@@ -119,6 +119,8 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
       return fallback("legacy gemini.strictExactMatch must be boolean.");
     if (deepseek.preset !== undefined && !isDeepSeekPreset(deepseek.preset))
       return fallback(`Invalid deepseek.preset '${String(deepseek.preset)}'.`);
+    if (deepseek.nativeRead !== undefined && typeof deepseek.nativeRead !== "boolean")
+      return fallback("deepseek.nativeRead must be boolean.");
 
     // v0.1.0 stored the custom-tool surface under codex.surface. Accept it as a migration
     // fallback, but normalize the setting to one universal surface shared by all custom modes.
@@ -177,6 +179,10 @@ export function parseSettings(value: unknown): { settings: EditModesSettings; wa
           preset: isDeepSeekPreset(deepseek.preset)
             ? deepseek.preset
             : DEFAULT_SETTINGS.deepseek.preset,
+          nativeRead:
+            typeof deepseek.nativeRead === "boolean"
+              ? deepseek.nativeRead
+              : DEFAULT_SETTINGS.deepseek.nativeRead,
         },
       },
     };

@@ -65,7 +65,7 @@ test("DeepSeek observation state is session-scoped even when sessions share cwd"
 });
 
 test("DeepSeek standard tool prompt guidance is projected exactly once", () => {
-  const tools = captureTools(registerDeepSeekFilesystemTools);
+  const tools = captureTools((pi) => registerDeepSeekFilesystemTools(pi, process.cwd()));
   const expected = new Map([
     [
       "read",

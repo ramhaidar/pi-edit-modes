@@ -70,8 +70,13 @@ function modelSupportsImages(model: unknown): boolean {
  * files fall back to the native `read` tool), `false` forces it on, `"auto"`
  * follows the model's advertised image input.
  */
-function effectiveImageSupport(model: unknown, override: SessionDisableReadImage): boolean {
-  return override === "auto" ? modelSupportsImages(model) : override;
+function effectiveImageSupport(
+  model: unknown,
+  sessionOverride: SessionDisableReadImage,
+  persistedNativeRead: boolean,
+): boolean {
+  if (sessionOverride !== "auto") return sessionOverride;
+  return persistedNativeRead ? false : modelSupportsImages(model);
 }
 
 function parseToolModeFlag(value: unknown): { mode: SessionToolMode; warning?: string } {
@@ -242,6 +247,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   let currentSurfaceReason: string | undefined;
   const shownWarnings = new Set<string>();
   let filesystemToolFlavor: FilesystemToolFlavor | undefined;
+  let registeredDeepseekNativeRead: boolean | undefined;
 
   // Pi treats tool_call input as mutable and other extensions commonly special-case
   // the built-in names write/edit using Pi-native argument fields. Keep the DeepSeek
@@ -263,9 +269,21 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   };
 
   const setFilesystemToolFlavor = (next: FilesystemToolFlavor, cwd: string): boolean => {
-    if (filesystemToolFlavor === next) return false;
-    if (next === "deepseek") registerDeepSeekFilesystemTools(pi, hooks);
-    else registerPiFilesystemTools(pi, cwd, hooks);
+    const nativeRead = store.snapshot().settings.deepseek.nativeRead;
+    // Same flavor but the persisted nativeRead toggle changed: the registered
+    // read/write/edit definitions are stale and must be re-registered.
+    if (
+      filesystemToolFlavor === next &&
+      !(next === "deepseek" && registeredDeepseekNativeRead !== nativeRead)
+    )
+      return false;
+    if (next === "deepseek") {
+      registerDeepSeekFilesystemTools(pi, cwd, hooks, { nativeRead });
+      registeredDeepseekNativeRead = nativeRead;
+    } else {
+      registerPiFilesystemTools(pi, cwd, hooks);
+      registeredDeepseekNativeRead = undefined;
+    }
     filesystemToolFlavor = next;
     return true;
   };
@@ -337,7 +355,11 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       bashOnly,
       codexSupported: codexSupport.supported,
       deepseekPreset,
-      deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
+      deepseekImageSupported: effectiveImageSupport(
+        model,
+        runtimeSessionDisableReadImage,
+        snapshot.settings.deepseek.nativeRead,
+      ),
       ownership,
     });
     setActiveToolsIfChanged(transition.nextTools);
@@ -360,7 +382,11 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         bashOnly,
         codexSupported: false,
         deepseekPreset,
-        deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
+        deepseekImageSupported: effectiveImageSupport(
+          model,
+          runtimeSessionDisableReadImage,
+          snapshot.settings.deepseek.nativeRead,
+        ),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -378,7 +404,11 @@ export default function editModesExtension(pi: ExtensionAPI): void {
           bashOnly,
           codexSupported: codexSupport.supported,
           deepseekPreset,
-          deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
+          deepseekImageSupported: effectiveImageSupport(
+            model,
+            runtimeSessionDisableReadImage,
+            snapshot.settings.deepseek.nativeRead,
+          ),
           ownership: transition.nextOwnership,
         });
         setActiveToolsIfChanged(transition.nextTools);
@@ -401,7 +431,11 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         bashOnly,
         codexSupported: codexSupport.supported,
         deepseekPreset,
-        deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
+        deepseekImageSupported: effectiveImageSupport(
+          model,
+          runtimeSessionDisableReadImage,
+          snapshot.settings.deepseek.nativeRead,
+        ),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -718,6 +752,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
     if (filesystemToolFlavor === "deepseek") {
       registerPiFilesystemTools(pi, process.cwd(), hooks);
       filesystemToolFlavor = "pi";
+      registeredDeepseekNativeRead = undefined;
     }
     clearDeepSeekFsRuntimes();
     const available = configuredToolNames(pi);

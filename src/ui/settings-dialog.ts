@@ -31,7 +31,7 @@ const DEFAULT_MODES: EditModesSettings["defaultMode"][] = [
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
 const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
-const SAVE_ROW = 16;
+const SAVE_ROW = 17;
 
 const ROW_DESCRIPTIONS: readonly string[] = [
   "Tool mode for this session only ('auto' follows the active model). Session-only: it does not change saved settings.",
@@ -50,6 +50,7 @@ const ROW_DESCRIPTIONS: readonly string[] = [
   "When On, Gemini relative-path fallback discovery respects .gitignore and .git/info/exclude rules.",
   "When On, Gemini relative-path fallback discovery respects .geminiignore. Custom ignore files remain configurable in edit-modes.json.",
   "DeepSeek tool/prompt profile: 'standard' is the full setup, 'minimal' is a lighter, lower-token setup.",
+  "When On, DeepSeek mode keeps Pi's native read tool and never activates read_image, so images go through the native read tool. Written to edit-modes.json on save.",
   "Write all changed values to edit-modes.json and close this dialog. Esc closes without saving.",
 ];
 
@@ -162,6 +163,10 @@ export class SettingsDialog {
         value: this.draft.settings.gemini.fileFiltering.respectGeminiIgnore ? "On" : "Off",
       },
       { label: "DeepSeek preset", value: this.draft.settings.deepseek.preset },
+      {
+        label: "DeepSeek native read",
+        value: this.draft.settings.deepseek.nativeRead ? "On" : "Off",
+      },
       { label: "Save settings", value: "" },
     ];
   }
@@ -242,6 +247,9 @@ export class SettingsDialog {
           this.draft.settings.deepseek.preset,
           direction,
         );
+        break;
+      case 16:
+        this.draft.settings.deepseek.nativeRead = !this.draft.settings.deepseek.nativeRead;
         break;
       case SAVE_ROW:
         this.done({ action: "save", draft: cloneDraft(this.draft) });

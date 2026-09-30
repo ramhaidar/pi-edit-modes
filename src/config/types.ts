@@ -43,6 +43,13 @@ export interface EditModesSettings {
   };
   deepseek: {
     preset: DeepSeekPreset;
+    /**
+     * Persisted DeepSeek read override. When false (default), DeepSeek mode
+     * replaces Pi's native `read` with the DeepSeek parity read and adds
+     * `read_image`. When true, Pi's native `read` is kept and `read_image` is
+     * not activated, so image files go through the native `read` tool.
+     */
+    nativeRead: boolean;
   };
 }
 

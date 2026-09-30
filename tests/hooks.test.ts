@@ -164,7 +164,7 @@ test("mode hooks can override resolution inputs/results and receive lifecycle no
           customIgnoreFilePaths: [],
         },
       },
-      deepseek: { preset: "standard" },
+      deepseek: { preset: "standard", nativeRead: false },
     },
     sessionMode: "auto",
     sessionSurface: "auto",

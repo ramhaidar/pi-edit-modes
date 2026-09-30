@@ -33,6 +33,27 @@ test("valid partial config merges with defaults", () => {
     customIgnoreFilePaths: [],
   });
   assert.equal(parsed.settings.deepseek.preset, "standard");
+  assert.equal(parsed.settings.deepseek.nativeRead, false);
+});
+
+test("deepseek.nativeRead defaults to false and accepts an explicit boolean", () => {
+  assert.equal(DEFAULT_SETTINGS.deepseek.nativeRead, false);
+  const parsed = parseSettings({ version: 1, deepseek: { nativeRead: true } });
+  assert.equal(parsed.warning, undefined);
+  assert.equal(parsed.settings.deepseek.nativeRead, true);
+});
+
+test("invalid deepseek.nativeRead falls back to defaults with a warning", () => {
+  const parsed = parseSettings({ version: 1, deepseek: { nativeRead: "yes" } });
+  assert.deepEqual(parsed.settings, DEFAULT_SETTINGS);
+  assert.match(parsed.warning ?? "", /deepseek\.nativeRead must be boolean/);
+});
+
+test("legacy deepseek sections without nativeRead still load", () => {
+  const parsed = parseSettings({ version: 1, deepseek: { preset: "minimal" } });
+  assert.equal(parsed.warning, undefined);
+  assert.equal(parsed.settings.deepseek.preset, "minimal");
+  assert.equal(parsed.settings.deepseek.nativeRead, false);
 });
 
 test("all is a valid default and session tool mode", () => {
@@ -114,6 +135,7 @@ test("settings store persists JSON and reloads it", async () => {
     settings.gemini.fileFiltering.respectGitIgnore = false;
     settings.gemini.fileFiltering.customIgnoreFilePaths = [".customignore"];
     settings.deepseek.preset = "minimal";
+    settings.deepseek.nativeRead = true;
     settings.bashOnly = true;
     await store.save(settings);
     const raw = await readFile(join(dir, "edit-modes.json"), "utf8");
@@ -127,6 +149,7 @@ test("settings store persists JSON and reloads it", async () => {
     assert.equal(snap.settings.gemini.fileFiltering.respectGitIgnore, false);
     assert.deepEqual(snap.settings.gemini.fileFiltering.customIgnoreFilePaths, [".customignore"]);
     assert.equal(snap.settings.deepseek.preset, "minimal");
+    assert.equal(snap.settings.deepseek.nativeRead, true);
     assert.equal(snap.settings.bashOnly, true);
   } finally {
     await rm(dir, { recursive: true, force: true });
