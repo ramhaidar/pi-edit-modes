@@ -2,6 +2,7 @@ import type {
   EditModesSettings,
   ModeResolution,
   SessionBashOnly,
+  SessionDisableReadImage,
   SessionToolMode,
   SessionToolSurface,
 } from "../config/types.ts";
@@ -16,6 +17,7 @@ export async function openSettingsDialog(input: {
   sessionMode: SessionToolMode;
   sessionSurface: SessionToolSurface;
   sessionBashOnly: SessionBashOnly;
+  sessionDisableReadImage: SessionDisableReadImage;
   settings: EditModesSettings;
 }): Promise<DialogResult | undefined> {
   return input.ctx.ui.custom(
@@ -25,6 +27,7 @@ export async function openSettingsDialog(input: {
           sessionMode: input.sessionMode,
           sessionSurface: input.sessionSurface,
           sessionBashOnly: input.sessionBashOnly,
+          sessionDisableReadImage: input.sessionDisableReadImage,
           settings: input.settings,
         },
         input.modelLabel,

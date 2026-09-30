@@ -8,8 +8,8 @@ import {
 } from "../src/ui/settings-dialog.ts";
 
 const theme = { fg: (_token: string, text: string) => text };
-const TOTAL_ROWS = 16; // rows 0..14 plus the save row
-const SAVE_ROW = 15;
+const TOTAL_ROWS = 17; // rows 0..15 plus the save row
+const SAVE_ROW = 16;
 
 /**
  * SettingsDialog clones the draft it is given, so tests must drive the dialog to
@@ -18,6 +18,7 @@ const SAVE_ROW = 15;
 function drive(initial: {
   bashOnly?: boolean;
   sessionBashOnly?: boolean | "auto";
+  sessionDisableReadImage?: boolean | "auto";
   select: number;
   presses?: Array<"\x1b[B" | "\x1b[C" | "\x1b[D" | "\r">;
 }): SettingsDialogDraft | undefined {
@@ -29,6 +30,7 @@ function drive(initial: {
       sessionMode: "auto",
       sessionSurface: "auto",
       sessionBashOnly: initial.sessionBashOnly ?? "auto",
+      sessionDisableReadImage: initial.sessionDisableReadImage ?? "auto",
       settings,
     },
     "test/model",
@@ -58,7 +60,13 @@ test("all mode is available in the popup session and default selectors", () => {
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.defaultMode = "all";
   const dialog = new SettingsDialog(
-    { sessionMode: "auto", sessionSurface: "auto", sessionBashOnly: "auto", settings },
+    {
+      sessionMode: "auto",
+      sessionSurface: "auto",
+      sessionBashOnly: "auto",
+      sessionDisableReadImage: "auto",
+      settings,
+    },
     "test/model",
     "pi",
     "pi (edit/write)",
@@ -74,7 +82,13 @@ test("all mode is available in the popup session and default selectors", () => {
 test("bash-only rows render in the dialog", () => {
   const settings = structuredClone(DEFAULT_SETTINGS);
   const dialog = new SettingsDialog(
-    { sessionMode: "auto", sessionSurface: "auto", sessionBashOnly: "auto", settings },
+    {
+      sessionMode: "auto",
+      sessionSurface: "auto",
+      sessionBashOnly: "auto",
+      sessionDisableReadImage: "auto",
+      settings,
+    },
     "test/model",
     "pi",
     "pi (edit/write)",
@@ -89,14 +103,41 @@ test("bash-only rows render in the dialog", () => {
   assert.match(rendered, /Default bash-only/);
 });
 
-test("row 5 toggles saved bashOnly and leaves auto discovery alone", () => {
-  const draft = drive({ select: 5, presses: ["\x1b[C"] });
+test("session read_image row renders and cycles auto -> off -> on", () => {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  const dialog = new SettingsDialog(
+    {
+      sessionMode: "auto",
+      sessionSurface: "auto",
+      sessionBashOnly: "auto",
+      sessionDisableReadImage: "auto",
+      settings,
+    },
+    "test/model",
+    "pi",
+    "pi (edit/write)",
+    undefined,
+    "default",
+    theme,
+    () => {},
+    () => {},
+  );
+  const rendered = dialog.render(76).join("\n");
+  assert.match(rendered, /Session read_image/);
+
+  const draft = drive({ select: 3, presses: ["\x1b[C", "\x1b[C", "\x1b[C", "\x1b[C"] });
+  assert.equal(draft?.sessionDisableReadImage, false);
+  assert.equal(draft?.settings.deepseek.preset, "standard");
+});
+
+test("row 6 toggles saved bashOnly and leaves auto discovery alone", () => {
+  const draft = drive({ select: 6, presses: ["\x1b[C"] });
   assert.equal(draft?.settings.bashOnly, true);
   assert.equal(draft?.settings.autoDiscovery.enabled, true);
 });
 
-test("row 6 still toggles auto discovery, proving alignment below the inserted rows", () => {
-  const draft = drive({ select: 6, presses: ["\x1b[C"] });
+test("row 7 still toggles auto discovery, proving alignment below the inserted rows", () => {
+  const draft = drive({ select: 7, presses: ["\x1b[C"] });
   assert.equal(draft?.settings.autoDiscovery.enabled, false);
   assert.equal(draft?.settings.bashOnly, false);
 });

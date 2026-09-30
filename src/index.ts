@@ -4,6 +4,7 @@ import type {
   ModelIdentity,
   ModeResolution,
   SessionBashOnly,
+  SessionDisableReadImage,
   SessionToolMode,
   SessionToolSurface,
   ToolMode,
@@ -61,6 +62,16 @@ function modelSupportsImages(model: unknown): boolean {
   if (!model || typeof model !== "object") return false;
   const input = (model as { input?: unknown }).input;
   return Array.isArray(input) && input.includes("image");
+}
+
+/**
+ * Effective image-input support for `read_image` activation. The session
+ * override wins over model capability: `true` suppresses `read_image` (image
+ * files fall back to the native `read` tool), `false` forces it on, `"auto"`
+ * follows the model's advertised image input.
+ */
+function effectiveImageSupport(model: unknown, override: SessionDisableReadImage): boolean {
+  return override === "auto" ? modelSupportsImages(model) : override;
 }
 
 function parseToolModeFlag(value: unknown): { mode: SessionToolMode; warning?: string } {
@@ -222,6 +233,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
   let runtimeSessionMode: SessionToolMode = "auto";
   let runtimeSessionSurface: SessionToolSurface = "auto";
   let runtimeSessionBashOnly: SessionBashOnly = "auto";
+  let runtimeSessionDisableReadImage: SessionDisableReadImage = "auto";
 
   const store = new EditModesConfigStore(getAgentDir());
   let ownership = initialToolOwnership();
@@ -325,7 +337,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
       bashOnly,
       codexSupported: codexSupport.supported,
       deepseekPreset,
-      deepseekImageSupported: modelSupportsImages(model),
+      deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
       ownership,
     });
     setActiveToolsIfChanged(transition.nextTools);
@@ -348,7 +360,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         bashOnly,
         codexSupported: false,
         deepseekPreset,
-        deepseekImageSupported: modelSupportsImages(model),
+        deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -366,7 +378,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
           bashOnly,
           codexSupported: codexSupport.supported,
           deepseekPreset,
-          deepseekImageSupported: modelSupportsImages(model),
+          deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
           ownership: transition.nextOwnership,
         });
         setActiveToolsIfChanged(transition.nextTools);
@@ -389,7 +401,7 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         bashOnly,
         codexSupported: codexSupport.supported,
         deepseekPreset,
-        deepseekImageSupported: modelSupportsImages(model),
+        deepseekImageSupported: effectiveImageSupport(model, runtimeSessionDisableReadImage),
         ownership: transition.nextOwnership,
       });
       setActiveToolsIfChanged(transition.nextTools);
@@ -509,12 +521,14 @@ export default function editModesExtension(pi: ExtensionAPI): void {
         sessionMode: runtimeSessionMode,
         sessionSurface: runtimeSessionSurface,
         sessionBashOnly: runtimeSessionBashOnly,
+        sessionDisableReadImage: runtimeSessionDisableReadImage,
         settings: snapshot.settings,
       });
       if (!result || result.action === "cancel") return;
       runtimeSessionMode = result.draft.sessionMode;
       runtimeSessionSurface = result.draft.sessionSurface;
       runtimeSessionBashOnly = result.draft.sessionBashOnly;
+      runtimeSessionDisableReadImage = result.draft.sessionDisableReadImage;
       await store.save(result.draft.settings);
       await syncTools(ctx.model, ctx, true);
       const notes = [

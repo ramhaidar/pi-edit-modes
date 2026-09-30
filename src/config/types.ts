@@ -4,6 +4,13 @@ export type ToolSurface = "replace" | "additive";
 export type SessionToolSurface = ToolSurface | "auto";
 /** Session-scoped bash-only override. `"auto"` defers to the persisted setting. */
 export type SessionBashOnly = boolean | "auto";
+/**
+ * Session-scoped `read_image` override. `"auto"` keeps default behavior
+ * (`read_image` appears on DeepSeek surfaces when the model supports images);
+ * `true` removes `read_image` so image files go through the native `read` tool;
+ * `false` forces `read_image` on even when the model advertises native image input.
+ */
+export type SessionDisableReadImage = boolean | "auto";
 export type GeminiApprovalMode = "ask_user" | "auto_edit";
 export type DeepSeekPreset = "standard" | "minimal";
 // Backward-compatible source alias for integrations that imported the old type name.

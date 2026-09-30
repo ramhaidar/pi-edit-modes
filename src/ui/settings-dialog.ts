@@ -2,6 +2,7 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 import type {
   EditModesSettings,
   SessionBashOnly,
+  SessionDisableReadImage,
   SessionToolMode,
   SessionToolSurface,
 } from "../config/types.ts";
@@ -10,6 +11,7 @@ export interface SettingsDialogDraft {
   sessionMode: SessionToolMode;
   sessionSurface: SessionToolSurface;
   sessionBashOnly: SessionBashOnly;
+  sessionDisableReadImage: SessionDisableReadImage;
   settings: EditModesSettings;
 }
 
@@ -18,6 +20,7 @@ export type DialogResult = { action: "save"; draft: SettingsDialogDraft } | { ac
 const SESSION_MODES: SessionToolMode[] = ["auto", "gemini", "codex", "deepseek", "all", "pi"];
 const SESSION_SURFACES: SessionToolSurface[] = ["auto", "replace", "additive"];
 const SESSION_BASH_ONLY: SessionBashOnly[] = ["auto", false, true];
+const SESSION_READ_IMAGE: SessionDisableReadImage[] = ["auto", false, true];
 const DEFAULT_MODES: EditModesSettings["defaultMode"][] = [
   "pi",
   "gemini",
@@ -28,12 +31,13 @@ const DEFAULT_MODES: EditModesSettings["defaultMode"][] = [
 const TOOL_SURFACES: EditModesSettings["surface"][] = ["replace", "additive"];
 const GEMINI_APPROVALS: EditModesSettings["gemini"]["approval"][] = ["ask_user", "auto_edit"];
 const DEEPSEEK_PRESETS: EditModesSettings["deepseek"]["preset"][] = ["standard", "minimal"];
-const SAVE_ROW = 15;
+const SAVE_ROW = 16;
 
 const ROW_DESCRIPTIONS: readonly string[] = [
   "Tool mode for this session only ('auto' follows the active model). Session-only: it does not change saved settings.",
   "Session-only tool surface: 'replace' swaps Pi's built-in edit tools for the mode's tools, 'additive' keeps both.",
   "Session-only bash-only override: 'auto' follows the saved setting, 'on' forces bash-only, 'off' forces it off for this session.",
+  "Session-only read_image override: 'auto' follows Pi defaults, 'off' removes read_image so images go through the native read tool, 'on' forces read_image on for this session.",
   "Mode used for new sessions when no model-specific rule matches. Written to edit-modes.json on save.",
   "Default surface for new sessions. A session surface override still wins while a session is running.",
   "Master bash-only override. When On, every mutating file tool is removed regardless of mode or surface, so bash is the only way to change files. Written to edit-modes.json on save.",
@@ -53,6 +57,10 @@ function bashOnlyLabel(value: SessionBashOnly): string {
   return value === "auto" ? "auto" : value ? "on" : "off";
 }
 
+function readImageLabel(value: SessionDisableReadImage): string {
+  return value === "auto" ? "auto" : value ? "on" : "off";
+}
+
 function cycle<T>(values: readonly T[], current: T, direction: -1 | 1): T {
   const index = Math.max(0, values.indexOf(current));
   return values[(index + direction + values.length) % values.length]!;
@@ -63,6 +71,7 @@ function cloneDraft(draft: SettingsDialogDraft): SettingsDialogDraft {
     sessionMode: draft.sessionMode,
     sessionSurface: draft.sessionSurface,
     sessionBashOnly: draft.sessionBashOnly,
+    sessionDisableReadImage: draft.sessionDisableReadImage,
     settings: structuredClone(draft.settings),
   };
 }
@@ -122,6 +131,10 @@ export class SettingsDialog {
       { label: "Current session mode", value: this.draft.sessionMode },
       { label: "Current session surface", value: this.draft.sessionSurface },
       { label: "Session bash-only", value: bashOnlyLabel(this.draft.sessionBashOnly) },
+      {
+        label: "Session read_image",
+        value: readImageLabel(this.draft.sessionDisableReadImage),
+      },
       { label: "Default mode", value: this.draft.settings.defaultMode },
       { label: "Default surface", value: this.draft.settings.surface },
       { label: "Default bash-only", value: this.draft.settings.bashOnly ? "On" : "Off" },
@@ -173,50 +186,57 @@ export class SettingsDialog {
         );
         break;
       case 3:
+        this.draft.sessionDisableReadImage = cycle(
+          SESSION_READ_IMAGE,
+          this.draft.sessionDisableReadImage,
+          direction,
+        );
+        break;
+      case 4:
         this.draft.settings.defaultMode = cycle(
           DEFAULT_MODES,
           this.draft.settings.defaultMode,
           direction,
         );
         break;
-      case 4:
+      case 5:
         this.draft.settings.surface = cycle(TOOL_SURFACES, this.draft.settings.surface, direction);
         break;
-      case 5:
+      case 6:
         this.draft.settings.bashOnly = !this.draft.settings.bashOnly;
         break;
-      case 6:
+      case 7:
         this.draft.settings.autoDiscovery.enabled = !this.draft.settings.autoDiscovery.enabled;
         break;
-      case 7:
+      case 8:
         this.draft.settings.autoDiscovery.gemini = !this.draft.settings.autoDiscovery.gemini;
         break;
-      case 8:
+      case 9:
         this.draft.settings.autoDiscovery.codex = !this.draft.settings.autoDiscovery.codex;
         break;
-      case 9:
+      case 10:
         this.draft.settings.autoDiscovery.deepseek = !this.draft.settings.autoDiscovery.deepseek;
         break;
-      case 10:
+      case 11:
         this.draft.settings.gemini.approval = cycle(
           GEMINI_APPROVALS,
           this.draft.settings.gemini.approval,
           direction,
         );
         break;
-      case 11:
+      case 12:
         this.draft.settings.gemini.disableLLMCorrection =
           !this.draft.settings.gemini.disableLLMCorrection;
         break;
-      case 12:
+      case 13:
         this.draft.settings.gemini.fileFiltering.respectGitIgnore =
           !this.draft.settings.gemini.fileFiltering.respectGitIgnore;
         break;
-      case 13:
+      case 14:
         this.draft.settings.gemini.fileFiltering.respectGeminiIgnore =
           !this.draft.settings.gemini.fileFiltering.respectGeminiIgnore;
         break;
-      case 14:
+      case 15:
         this.draft.settings.deepseek.preset = cycle(
           DEEPSEEK_PRESETS,
           this.draft.settings.deepseek.preset,
